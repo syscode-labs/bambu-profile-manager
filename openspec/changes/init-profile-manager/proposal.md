@@ -19,3 +19,5 @@ Filament inventory (spools, AMS, RFID, weight, humidity, purchase history), prin
 ## Source
 
 Full architecture, domain model, and agent workstream breakdown: `design.md` (verbatim from `~/Downloads/bambu-profile-manager-agent-plan.md`).
+
+Research against real local Bambu Studio config and web sources, plus resolved grill decisions: `findings.md`, `decisions.md`. Where they conflict with `design.md`, `decisions.md` wins.

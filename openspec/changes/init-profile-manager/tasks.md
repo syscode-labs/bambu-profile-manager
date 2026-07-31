@@ -20,14 +20,14 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 - [ ] Agent F: Bambu adapter (discover/validate/stage/publish/observe/verify), atomic publish + backups, reconciliation state machine, rollback
 - Exit gate: import → rebind → publish → Studio recognition → sync/reload → post-sync re-read → semantic equality. Do not begin broad UI work before this passes.
 
-## Phase 4 — UI and operational support
-- [ ] Agent G: templ/HTMX UI (profile browser, detail, dependency graph, rebind, deployments, rollback)
-- [ ] Agent H: Ristretto cache, revision-based keys, dependency-aware invalidation, singleflight, WebSocket hub, bounded queues
-- [ ] Agent I: multi-stage Dockerfile (amd64/arm64), compose example, CI (unit/integration/fuzz + Bambu compatibility job), release artifacts
+## Phase 4 — UI polish and operational support
+- [ ] Agent G: templ/HTMX UI (profile browser, detail, dependency graph, rebind, deployments, rollback) — plain REST + page reloads, built starting in Phase 1, not deferred (see decisions.md #7)
+- [ ] Agent H: Ristretto cache, revision-based keys, dependency-aware invalidation, singleflight, WebSocket hub, bounded queues — **deferred until real usage shows a need**, not built up front (decisions.md #7)
+- [ ] Agent I: multi-stage Dockerfile (amd64/arm64), compose example, CI (unit/integration/fuzz + Bambu compatibility job — CI job may be allowed-failure, but the app itself never claims verification it didn't do, decisions.md #6), release artifacts
 - Exit gate: `docker compose up` runs a working local instance against a bind-mounted Bambu directory
 
 ## Deferred (post-v1)
 - PostgreSQL adapter, Google Sheets projection, OrcaSlicer support, experimental Bambu Cloud adapter, multi-instance deployment
 
-## Primary Acceptance Test (design.md §22)
-- [ ] Fiberon PET-CF17 @ X1C 0.4 → P1S 0.4: full discover→export→import→rebind→publish→sync→verify→slice loop, `expected semantic profile == post-sync semantic profile`
+## Primary Acceptance Test (design.md §22, fixture swapped per decisions.md #8)
+- [ ] "Syscode - AmazonBasics ABS 0.6" @ X1C → P1S: full discover→export→import→rebind→publish→sync→verify→slice loop, `expected semantic profile == post-sync semantic profile`
