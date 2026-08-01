@@ -143,15 +143,15 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
     <label class="block">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">Profile</span>
       <div class="flex items-center gap-2">
-        <select id="copy-profile-select" name="name" required class="flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
-        {{range .Names}}<option value="{{.}}">{{.}}</option>{{end}}
-        </select>
-        <div class="relative shrink-0">
+        <div id="filament-preview-wrap" class="relative shrink-0">
           <button type="button" id="filament-preview-btn"
             class="w-8 h-8 rounded-lg border border-zinc-300 text-zinc-400 hover:text-zinc-700 hover:border-zinc-400 text-xs flex items-center justify-center"
             aria-label="Preview filament properties">&#9432;</button>
-          <div id="filament-preview-popup" class="hidden absolute right-0 top-9 z-20 w-80 max-h-96 overflow-y-auto bg-white border border-zinc-200 rounded-xl shadow-lg p-4 text-xs"></div>
+          <div id="filament-preview-popup" class="hidden absolute left-0 top-8 pt-2 z-20 w-96 max-h-[32rem] overflow-y-auto bg-white border border-zinc-200 rounded-xl shadow-lg p-4 text-xs"></div>
         </div>
+        <select id="copy-profile-select" name="name" required class="flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+        {{range .Names}}<option value="{{.}}">{{.}}</option>{{end}}
+        </select>
       </div>
     </label>
     <label class="block">
@@ -168,10 +168,12 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
 <script>
 (function() {
   var select = document.getElementById('copy-profile-select');
+  var wrap = document.getElementById('filament-preview-wrap');
   var btn = document.getElementById('filament-preview-btn');
   var popup = document.getElementById('filament-preview-popup');
-  if (!select || !btn || !popup) return;
+  if (!select || !wrap || !btn || !popup) return;
   var cache = {};
+  var hideTimer = null;
   function load(name) {
     if (Object.prototype.hasOwnProperty.call(cache, name)) {
       popup.innerHTML = cache[name];
@@ -183,16 +185,19 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
       .then(function(html) { cache[name] = html; popup.innerHTML = html; })
       .catch(function() { popup.innerHTML = '<p class="text-red-500">Could not load preview.</p>'; });
   }
-  btn.addEventListener('mouseenter', function() {
+  function show() {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
     if (select.value) load(select.value);
     popup.classList.remove('hidden');
-  });
-  btn.addEventListener('focus', function() {
-    if (select.value) load(select.value);
-    popup.classList.remove('hidden');
-  });
-  btn.addEventListener('mouseleave', function() { popup.classList.add('hidden'); });
-  btn.addEventListener('blur', function() { popup.classList.add('hidden'); });
+  }
+  function scheduleHide() {
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(function() { popup.classList.add('hidden'); }, 300);
+  }
+  wrap.addEventListener('mouseenter', show);
+  wrap.addEventListener('mouseleave', scheduleHide);
+  btn.addEventListener('focus', show);
+  btn.addEventListener('blur', scheduleHide);
 })();
 </script>
 `))
