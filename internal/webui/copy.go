@@ -324,10 +324,10 @@ func (s *Server) handleCopyPreview(w http.ResponseWriter, r *http.Request) {
 	renderPage(w, copyPreviewTmpl, data, "Copy preview", "Copy preview: "+name, "&rarr; "+printerToken, "copy", s.studioWarning())
 }
 
-var copyResultTmpl = template.Must(template.New("copyResult").Parse(`
+var copyResultTmpl = template.Must(template.New("copyResult").Funcs(statusFuncs).Parse(`
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
   <div class="flex items-center gap-2">
-    <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">{{.Deployment.State}}</span>
+    <span title="{{.Deployment.State}}" class="text-xs font-medium px-2.5 py-1 rounded-full {{statusClasses (print .Deployment.State)}}">{{statusLabel (print .Deployment.State)}}</span>
   </div>
   <p class="text-sm text-zinc-500">Parent: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Parent}}</code> &middot; Name: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Name}}</code></p>
   {{if .Snapshot}}<p class="text-sm text-zinc-500">Backup taken: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Snapshot}}</code></p>{{end}}
@@ -416,13 +416,13 @@ func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
 	renderPage(w, copyResultTmpl, data, "Copy result", "Copy result", "", "copy", "")
 }
 
-var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Parse(`
-<p class="text-sm text-zinc-500">A deployment only reaches <code class="bg-zinc-100 px-1 rounded">ACTIVE</code> once Bambu Studio, on this machine, has actually
+var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Funcs(statusFuncs).Parse(`
+<p class="text-sm text-zinc-500">A deployment only shows <strong>VERIFIED</strong> once Bambu Studio, on this machine, has actually
   opened and saved the profile and its settings still match &mdash; not just because bambupm wrote the file to disk. This is a local check
   (it reads the profile's own metadata file); it has nothing to do with Bambu's cloud account sync.</p>
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
   <div class="flex items-center justify-between">
-    <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">{{.Deployment.State}}</span>
+    <span title="{{.Deployment.State}}" class="text-xs font-medium px-2.5 py-1 rounded-full {{statusClasses (print .Deployment.State)}}">{{statusLabel (print .Deployment.State)}}</span>
     <span class="text-xs text-zinc-400">Revision {{.Deployment.Revision}}</span>
   </div>
   <ol class="relative border-l border-zinc-200 ml-2 space-y-3">

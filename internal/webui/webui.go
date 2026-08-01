@@ -24,6 +24,37 @@ import (
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
 )
 
+// statusLabel/statusClasses collapse the reconcile package's raw state names
+// (STAGED, OBSERVED_BY_STUDIO, ...) into the one thing a user actually needs
+// from a badge: is this done, still waiting on you to Save in Bambu Studio,
+// or did something go wrong. Green/amber/red, one glance, no need to read
+// the raw enum name to know which bucket a state is in.
+func statusLabel(state string) string {
+	switch state {
+	case "ROUND_TRIP_VERIFIED", "ACTIVE":
+		return "VERIFIED"
+	case "INSTALLED_LOCALLY":
+		return "AWAITING SAVE IN STUDIO"
+	case "DRAFT", "VALIDATED", "STAGED", "OBSERVED_BY_STUDIO", "SYNC_OBSERVED":
+		return "IN PROGRESS"
+	default:
+		return state // a failure state (SEMANTIC_MISMATCH, REJECTED_BY_STUDIO, ...) — name it plainly
+	}
+}
+
+func statusClasses(state string) string {
+	switch state {
+	case "ROUND_TRIP_VERIFIED", "ACTIVE":
+		return "bg-emerald-100 text-emerald-700"
+	case "INSTALLED_LOCALLY", "DRAFT", "VALIDATED", "STAGED", "OBSERVED_BY_STUDIO", "SYNC_OBSERVED":
+		return "bg-amber-100 text-amber-700"
+	default:
+		return "bg-red-100 text-red-700"
+	}
+}
+
+var statusFuncs = template.FuncMap{"statusLabel": statusLabel, "statusClasses": statusClasses}
+
 type Server struct {
 	Svc *service.Service
 	// UserDir/SystemDirs let the "copy to another printer" and backups
@@ -367,14 +398,14 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	renderPage(w, profileTmpl, data, p.Name, p.Name, "", "profiles", "")
 }
 
-var deploymentsTmpl = template.Must(template.New("deployments").Parse(`
+var deploymentsTmpl = template.Must(template.New("deployments").Funcs(statusFuncs).Parse(`
 <p><a href="/profiles/{{.Profile.ID}}" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; {{.Profile.Name}}</a></p>
 <p class="text-sm text-zinc-500">Every attempt to publish this profile into Bambu Studio, in order, with the exact state-machine transitions it went through &mdash; nothing here is claimed without the app actually having checked it.</p>
 {{range .Deployments}}
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
   <div class="flex items-center justify-between mb-3">
     <h2 class="text-sm font-medium text-zinc-500">Revision {{.Revision}}</h2>
-    <a href="/deployments/{{.ID}}" class="text-xs font-medium px-2.5 py-1 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-200">{{.State}}</a>
+    <a href="/deployments/{{.ID}}" title="{{.State}}" class="text-xs font-medium px-2.5 py-1 rounded-full {{statusClasses (print .State)}} hover:opacity-80">{{statusLabel (print .State)}}</a>
   </div>
   <ol class="relative border-l border-zinc-200 ml-2 space-y-3">
   {{range .History}}<li class="ml-4">

@@ -7,6 +7,28 @@ import (
 	"github.com/syscod3/bambu-profile-manager/internal/resolver"
 )
 
+func TestStatusLabelAndClassesBucketByOutcome(t *testing.T) {
+	cases := []struct {
+		state       string
+		wantLabel   string
+		wantClasses string
+	}{
+		{"ACTIVE", "VERIFIED", "bg-emerald-100 text-emerald-700"},
+		{"ROUND_TRIP_VERIFIED", "VERIFIED", "bg-emerald-100 text-emerald-700"},
+		{"INSTALLED_LOCALLY", "AWAITING SAVE IN STUDIO", "bg-amber-100 text-amber-700"},
+		{"STAGED", "IN PROGRESS", "bg-amber-100 text-amber-700"},
+		{"SEMANTIC_MISMATCH", "SEMANTIC_MISMATCH", "bg-red-100 text-red-700"},
+	}
+	for _, c := range cases {
+		if got := statusLabel(c.state); got != c.wantLabel {
+			t.Errorf("statusLabel(%q) = %q, want %q", c.state, got, c.wantLabel)
+		}
+		if got := statusClasses(c.state); got != c.wantClasses {
+			t.Errorf("statusClasses(%q) = %q, want %q", c.state, got, c.wantClasses)
+		}
+	}
+}
+
 func TestProfileSummarySkipsMissingFields(t *testing.T) {
 	fields := map[string]any{"filament_vendor": "AmazonBasics", "filament_type": "ABS"}
 	got := profileSummary(fields)

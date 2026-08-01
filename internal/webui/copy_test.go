@@ -134,7 +134,7 @@ func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 		t.Fatalf("POST /copy/publish status = %d, want 200", publishResp.StatusCode)
 	}
 	publishBody, _ := io.ReadAll(publishResp.Body)
-	if !strings.Contains(string(publishBody), ">INSTALLED_LOCALLY<") {
+	if !strings.Contains(string(publishBody), `title="INSTALLED_LOCALLY"`) || !strings.Contains(string(publishBody), ">AWAITING SAVE IN STUDIO<") {
 		t.Fatalf("publish result's final state is not INSTALLED_LOCALLY (no .info exists yet for a brand-new profile, so recognition can't have happened): %s", publishBody)
 	}
 	if !strings.Contains(string(publishBody), "Backup taken") {
@@ -186,7 +186,7 @@ func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 	}
 	defer finalResp.Body.Close()
 	finalBody, _ := io.ReadAll(finalResp.Body)
-	if !strings.Contains(string(finalBody), "ACTIVE") {
+	if !strings.Contains(string(finalBody), `title="ACTIVE"`) || !strings.Contains(string(finalBody), ">VERIFIED<") {
 		t.Fatalf("deployment did not reach ACTIVE after check-recognition: %s", finalBody)
 	}
 }
@@ -236,7 +236,7 @@ func TestBackgroundPollerDetectsRecognitionWithoutManualCheck(t *testing.T) {
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if strings.Contains(string(body), ">ACTIVE<") {
+		if strings.Contains(string(body), ">VERIFIED<") {
 			return
 		}
 		if time.Now().After(deadline) {
