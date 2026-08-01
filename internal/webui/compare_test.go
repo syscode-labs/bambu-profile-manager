@@ -95,3 +95,30 @@ func TestCompareItemsMarksNotSetWhenMissing(t *testing.T) {
 		t.Fatal("only_in_a row not found")
 	}
 }
+
+func TestFormatValueUnwrapsIdenticalArrayWithTempUnit(t *testing.T) {
+	got := formatValue("nozzle_temperature", []any{"250", "250"})
+	if got != "250 °C" {
+		t.Fatalf("formatValue = %q, want %q (unwrapped, deduped, unit added)", got, "250 °C")
+	}
+}
+
+func TestFormatValueJoinsDistinctArrayValues(t *testing.T) {
+	got := formatValue("nozzle_temperature", []any{"250", "260"})
+	if got != "250 / 260 °C" {
+		t.Fatalf("formatValue = %q, want %q (distinct values joined)", got, "250 / 260 °C")
+	}
+}
+
+func TestFormatValueNoUnitForNonTemperatureField(t *testing.T) {
+	got := formatValue("default_filament_colour", []any{"#DC0C26"})
+	if got != "#DC0C26" {
+		t.Fatalf("formatValue = %q, want %q (no unit, unwrapped)", got, "#DC0C26")
+	}
+}
+
+func TestFormatValuePlainScalarUnchanged(t *testing.T) {
+	if got := formatValue("filament_type", "ABS"); got != "ABS" {
+		t.Fatalf("formatValue = %q, want %q", got, "ABS")
+	}
+}

@@ -17,18 +17,62 @@ import (
 // profile fixtures (see openspec/changes/init-profile-manager/findings.md).
 type summaryField struct{ Label, Value string }
 
+// formatValue renders a decoded JSON field the way Bambu Studio's own panel
+// would show it, not Go's default formatting. Confirmed against real
+// profiles (findings.md): most numeric settings are stored as an array with
+// one entry per extruder (e.g. nozzle_temperature: ["250","250"]) — Go's
+// fmt.Sprint renders that as the literal "[250 250]", which is not what
+// Studio displays. Unwraps a single distinct value; keeps distinct
+// per-extruder values joined with " / " rather than hiding them.
+func formatValue(key string, v any) string {
+	var s string
+	if arr, ok := v.([]any); ok {
+		parts := make([]string, len(arr))
+		for i, e := range arr {
+			parts[i] = fmt.Sprint(e)
+		}
+		allSame := true
+		for _, p := range parts {
+			if p != parts[0] {
+				allSame = false
+				break
+			}
+		}
+		if allSame && len(parts) > 0 {
+			s = parts[0]
+		} else {
+			s = strings.Join(parts, " / ")
+		}
+	} else {
+		s = fmt.Sprint(v)
+	}
+	if s != "" && isTemperatureKey(key) {
+		s += " °C"
+	}
+	return s
+}
+
+// isTemperatureKey is a name-based heuristic (no authoritative units schema
+// exists — see findings.md) for which fields are temperatures worth a °C
+// suffix. "temperature_type" and similar non-numeric fields would false
+// -positive on a bare "temp" match, so this requires the fuller "temp"
+// substring in a numeric-looking context; kept simple and conservative.
+func isTemperatureKey(key string) bool {
+	return strings.Contains(key, "_temp") || strings.HasPrefix(key, "temp")
+}
+
 func fieldString(fields map[string]any, key string) string {
 	v, ok := fields[key]
 	if !ok {
 		return ""
 	}
-	return fmt.Sprint(v)
+	return formatValue(key, v)
 }
 
 func profileSummary(fields map[string]any) []summaryField {
 	var out []summaryField
 	add := func(label, key string) {
-		if v := fieldString(fields, key); v != "" && v != "[]" {
+		if v := fieldString(fields, key); v != "" {
 			out = append(out, summaryField{label, v})
 		}
 	}
@@ -106,7 +150,7 @@ type fieldGroup struct {
 func groupedFields(fields map[string]any) []fieldGroup {
 	byCategory := map[string][]kv{}
 	for k, v := range fields {
-		byCategory[categoryOf(k)] = append(byCategory[categoryOf(k)], kv{Key: prettyLabel(k), Value: fmt.Sprint(v)})
+		byCategory[categoryOf(k)] = append(byCategory[categoryOf(k)], kv{Key: prettyLabel(k), Value: formatValue(k, v)})
 	}
 	var groups []fieldGroup
 	for _, title := range categoryOrder {
@@ -150,7 +194,7 @@ func compareItems(itemsFields []map[string]any) []compareGroup {
 		for i, f := range itemsFields {
 			s := "(not set)"
 			if v, ok := f[k]; ok {
-				s = fmt.Sprint(v)
+				s = formatValue(k, v)
 			}
 			values[i] = s
 			seen[s] = true
