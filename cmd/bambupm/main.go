@@ -9,12 +9,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
 	"github.com/syscod3/bambu-profile-manager/internal/parser"
 	"github.com/syscod3/bambu-profile-manager/internal/resolver"
+	"github.com/syscod3/bambu-profile-manager/internal/service"
+	"github.com/syscod3/bambu-profile-manager/internal/storage/sqlite"
+	"github.com/syscod3/bambu-profile-manager/internal/webui"
 )
 
 func main() {
@@ -28,6 +32,8 @@ func main() {
 		cmdScan(os.Args[2:])
 	case "resolve":
 		cmdResolve(os.Args[2:])
+	case "serve":
+		cmdServe(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -46,9 +52,13 @@ Usage:
       (flattened) fields as JSON. --dir may be passed more than once to
       search several directories (e.g. user + system profile dirs).
 
-Export/import/rebind/publish are available via internal/service and
-internal/bundle for now — no CLI surface yet (see
-openspec/changes/init-profile-manager/tasks.md, unit 12).`)
+  bambupm serve --db <path> --addr :8080
+      Start the local web UI (list/import/view profiles). --db defaults to
+      bambupm.db in the current directory.
+
+Rebind/publish are available via internal/service for now — no CLI surface
+yet (needs the user present for the Studio-closed precondition, decisions.md
+#4, so it's deliberately not a one-command CLI action).`)
 }
 
 func cmdScan(args []string) {
@@ -112,6 +122,31 @@ func cmdResolve(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println(string(b))
+}
+
+func cmdServe(args []string) {
+	dbPath := flagValue(args, "--db")
+	if dbPath == "" {
+		dbPath = "bambupm.db"
+	}
+	addr := flagValue(args, "--addr")
+	if addr == "" {
+		addr = ":8080"
+	}
+
+	repo, err := sqlite.Open(dbPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "serve:", err)
+		os.Exit(1)
+	}
+	defer repo.Close()
+
+	srv := &webui.Server{Svc: &service.Service{Repo: repo}}
+	fmt.Fprintf(os.Stderr, "bambupm web UI listening on %s (db: %s)\n", addr, dbPath)
+	if err := http.ListenAndServe(addr, srv.Routes()); err != nil {
+		fmt.Fprintln(os.Stderr, "serve:", err)
+		os.Exit(1)
+	}
 }
 
 func flagValue(args []string, name string) string {

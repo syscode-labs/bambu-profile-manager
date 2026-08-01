@@ -25,7 +25,8 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 - Exit gate: import → rebind → publish → Studio recognition → sync/reload → post-sync re-read → semantic equality. Do not begin broad UI work before this passes. **Real end-to-end publish against the live Bambu Studio directory needs the user present (Studio must be closed/reopened) and empirical validation of the OBSERVED_BY_STUDIO detector — cannot be completed unattended.**
 
 ## Phase 4 — UI polish and operational support
-- [ ] Agent G: templ/HTMX UI (profile browser, detail, dependency graph, rebind, deployments, rollback) — plain REST + page reloads, built starting in Phase 1, not deferred (see decisions.md #7)
+- [x] Agent G (partial): plain server-rendered UI (profile list, detail with resolved JSON + revision history, import) — `internal/webui`, `bambupm serve`. Uses stdlib `html/template` + page reloads, not templ/HTMX (decisions.md #7 only asked for "plain REST + page reloads"; HTMX buys nothing without partial updates, so it's deferred with the rest of the deferred infra rather than added unused).
+- [ ] Agent G (remaining): dependency graph view, rebind page, deployments/rollback page — need the export-from-live-filesystem path and Deployment storage wired first
 - [ ] Agent H: Ristretto cache, revision-based keys, dependency-aware invalidation, singleflight, WebSocket hub, bounded queues — **deferred until real usage shows a need**, not built up front (decisions.md #7)
 - [ ] Agent I: multi-stage Dockerfile (amd64/arm64), compose example, CI (unit/integration/fuzz + Bambu compatibility job — CI job may be allowed-failure, but the app itself never claims verification it didn't do, decisions.md #6), release artifacts
 - Exit gate: `docker compose up` runs a working local instance against a bind-mounted Bambu directory
