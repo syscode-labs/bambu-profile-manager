@@ -488,6 +488,59 @@ func TestCompareLiveProcessProfiles(t *testing.T) {
 	}
 }
 
+// TestIndexProcessShowsLiveProfilesAndLinksToDetailAndCompare covers
+// browsing process profiles from the Profiles page (previously filament
+// only): the /process tab must list them, link into a live detail view,
+// and that view must link into Compare using the liveprocess: prefix.
+func TestIndexProcessShowsLiveProfilesAndLinksToDetailAndCompare(t *testing.T) {
+	ts, _, _, _ := newTestServerWithProcessDir(t)
+
+	resp, err := http.Get(ts.URL + "/process")
+	if err != nil {
+		t.Fatalf("GET /process: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "Syscode - 0.20mm Standard @BBL X1C") {
+		t.Fatalf("process index missing a live profile: %s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "/live/process/") {
+		t.Fatalf("process index did not link into the process live view: %s", bodyStr)
+	}
+
+	liveResp, err := http.Get(ts.URL + "/live/process/" + url.PathEscape("Syscode - 0.20mm Standard @BBL X1C"))
+	if err != nil {
+		t.Fatalf("GET /live/process/...: %v", err)
+	}
+	defer liveResp.Body.Close()
+	if liveResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /live/process/... status = %d, want 200", liveResp.StatusCode)
+	}
+	liveBody, _ := io.ReadAll(liveResp.Body)
+	if !strings.Contains(string(liveBody), `/compare?item=liveprocess:`) {
+		t.Fatalf("process live view missing a Compare link with the liveprocess: prefix: %s", liveBody)
+	}
+	if !strings.Contains(string(liveBody), `href="/copy/process"`) {
+		t.Fatalf("process live view missing a Copy link to /copy/process: %s", liveBody)
+	}
+}
+
+// TestIndexProcessRoutes404WhenNotConfigured guards the "not wired up"
+// path, same as the copy/preview routes.
+func TestIndexProcessRoutes404WhenNotConfigured(t *testing.T) {
+	ts, _, _ := newTestServerWithLiveDir(t) // no ProcessSvc
+
+	resp, err := http.Get(ts.URL + "/process")
+	if err != nil {
+		t.Fatalf("GET /process: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestBackupsListAndRestoreEndToEnd(t *testing.T) {
 	ts, liveDir, _ := newTestServerWithLiveDir(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

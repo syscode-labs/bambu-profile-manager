@@ -162,7 +162,7 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
   </p>
   {{end}}
 <form method="post" action="{{if eq .Kind "process"}}/copy/process/preview{{else}}/copy/preview{{end}}" class="space-y-4">
-  <div class="grid grid-cols-2 gap-4">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
     <label class="block">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">Profile</span>
       <div class="flex items-center gap-2">

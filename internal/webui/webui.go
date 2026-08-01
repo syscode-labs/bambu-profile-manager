@@ -119,9 +119,11 @@ func (s *Server) processKind() (profileKind, bool) {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
+	mux.HandleFunc("GET /process", s.handleIndexProcess)
 	mux.HandleFunc("GET /profiles/{id}", s.handleProfile)
 	mux.HandleFunc("GET /profiles/{id}/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /live/{name}", s.handleLiveProfile)
+	mux.HandleFunc("GET /live/process/{name}", s.handleLiveProfileProcess)
 	mux.HandleFunc("GET /api/profile-preview", s.handleProfilePreviewFragment)
 	mux.HandleFunc("GET /compare", s.handleComparePage)
 	mux.HandleFunc("GET /import", s.handleImportForm)
@@ -142,20 +144,25 @@ func (s *Server) Routes() http.Handler {
 }
 
 var indexTmpl = template.Must(template.New("index").Parse(`
+<div class="inline-flex rounded-full bg-zinc-100 p-1 text-sm font-medium mb-4">
+  <a href="/" class="px-4 py-1.5 rounded-full transition {{if eq .Kind "filament"}}bg-zinc-900 text-white shadow-sm{{else}}text-zinc-500 hover:text-zinc-800{{end}}">Filament</a>
+  <a href="/process" class="px-4 py-1.5 rounded-full transition {{if eq .Kind "process"}}bg-zinc-900 text-white shadow-sm{{else}}text-zinc-500 hover:text-zinc-800{{end}}">Process (print)</a>
+</div>
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
   <p class="text-sm text-zinc-600 leading-relaxed">
-    bambupm tracks your Bambu Studio filament profiles, lets you <strong>copy one to another printer</strong> without
+    bambupm tracks your Bambu Studio {{if eq .Kind "process"}}process (print){{else}}filament{{end}} profiles, lets you <strong>copy one to another printer</strong> without
     touching dependency chains by hand, and <strong>verifies</strong> Bambu Studio actually recognized the result
     before calling it done &mdash; instead of assuming a file write means success.
   </p>
 </section>
 
 <div class="grid grid-cols-3 gap-4">
-  <a href="/copy" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
+  <a href="{{if eq .Kind "process"}}/copy/process{{else}}/copy{{end}}" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
     <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/></svg>
     <p class="text-sm font-semibold group-hover:text-emerald-700">Copy to another printer</p>
     <p class="text-xs text-zinc-500 mt-1">Pick a profile and a target printer &mdash; the parent chain is matched for you.</p>
   </a>
+  {{if eq .Kind "filament"}}
   <a href="/import" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
     <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
     <p class="text-sm font-semibold group-hover:text-emerald-700">Import a bundle</p>
@@ -166,23 +173,31 @@ var indexTmpl = template.Must(template.New("index").Parse(`
     <p class="text-sm font-semibold group-hover:text-emerald-700">Backups</p>
     <p class="text-xs text-zinc-500 mt-1">Every publish snapshots your directory first &mdash; restore any of them.</p>
   </a>
+  {{else}}
+  <a href="/compare" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
+    <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l7 4-7 4M4 4v16M20 4v16"/></svg>
+    <p class="text-sm font-semibold group-hover:text-emerald-700">Compare</p>
+    <p class="text-xs text-zinc-500 mt-1">Diff any two or three process profiles side by side.</p>
+  </a>
+  {{end}}
 </div>
 
 <div>
   <h2 class="text-sm font-medium text-zinc-500 mb-3">All profiles</h2>
-  {{if .}}
+  {{if .Items}}
   <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm divide-y divide-zinc-100">
-  {{range .}}<a href="{{.Link}}" class="flex items-center justify-between px-5 py-3.5 hover:bg-zinc-50 transition first:rounded-t-2xl last:rounded-b-2xl">
+  {{$kind := .Kind}}
+  {{range .Items}}<a href="{{.Link}}" class="flex items-center justify-between px-5 py-3.5 hover:bg-zinc-50 transition first:rounded-t-2xl last:rounded-b-2xl">
     <span class="text-sm font-medium text-zinc-800">{{.Name}}</span>
     <div class="flex items-center gap-2">
-      {{if not .Tracked}}<span class="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500">not tracked</span>{{end}}
+      {{if and (eq $kind "filament") (not .Tracked)}}<span class="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500">not tracked</span>{{end}}
       <svg class="w-4 h-4 text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
     </div>
   </a>{{end}}
   </div>
   {{else}}
   <div class="text-center py-12 text-zinc-400 bg-white rounded-2xl border border-dashed border-zinc-200">
-    <p class="text-sm">No profiles found. Point <code class="bg-zinc-100 px-1 rounded">bambupm serve</code> at your Bambu Studio directory with --user-dir, or Import a bundle.</p>
+    <p class="text-sm">No profiles found. {{if eq .Kind "process"}}Point <code class="bg-zinc-100 px-1 rounded">bambupm serve</code> at your Bambu Studio process directory with --process-user-dir.{{else}}Point <code class="bg-zinc-100 px-1 rounded">bambupm serve</code> at your Bambu Studio directory with --user-dir, or Import a bundle.{{end}}</p>
   </div>
   {{end}}
 </div>
@@ -195,8 +210,21 @@ type indexProfile struct {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	s.renderIndex(w, r, s.filamentKind())
+}
+
+func (s *Server) handleIndexProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderIndex(w, r, kind)
+}
+
+func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, kind profileKind) {
 	ctx := r.Context()
-	tracked, err := s.Svc.Repo.Profiles().List(ctx)
+	tracked, err := kind.Svc.Repo.Profiles().List(ctx)
 	if err != nil {
 		httpError(w, err)
 		return
@@ -206,9 +234,16 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		trackedIDByName[p.Name] = p.ID
 	}
 
+	liveLink := func(name string) string {
+		if kind.Key == "process" {
+			return "/live/process/" + url.PathEscape(name)
+		}
+		return "/live/" + url.PathEscape(name)
+	}
+
 	var items []indexProfile
-	if s.UserDir != "" {
-		set, err := resolver.LoadDirs([]string{s.UserDir})
+	if kind.UserDir != "" {
+		set, err := resolver.LoadDirs([]string{kind.UserDir})
 		if err != nil {
 			httpError(w, err)
 			return
@@ -219,13 +254,19 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			if id, ok := trackedIDByName[name]; ok {
-				items = append(items, indexProfile{Name: name, Tracked: true, Link: "/profiles/" + id})
-			} else {
-				items = append(items, indexProfile{Name: name, Tracked: false, Link: "/live/" + url.PathEscape(name)})
+			// Only filament links to a tracked profile's revision-history
+			// page — process publishes are tracked in their own db too,
+			// but there's no equivalent detail/deployments page for them
+			// yet, so every process profile browses via the live view.
+			if kind.Key == "filament" {
+				if id, ok := trackedIDByName[name]; ok {
+					items = append(items, indexProfile{Name: name, Tracked: true, Link: "/profiles/" + id})
+					continue
+				}
 			}
+			items = append(items, indexProfile{Name: name, Tracked: false, Link: liveLink(name)})
 		}
-	} else {
+	} else if kind.Key == "filament" {
 		// No live directory configured (e.g. `serve` without --user-dir) —
 		// fall back to whatever's tracked in the db.
 		for _, p := range tracked {
@@ -234,16 +275,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	}
 
-	renderPage(w, indexTmpl, items, "Profiles", "Bambu Profile Manager", "", "profiles", "")
+	data := struct {
+		Kind  string
+		Items []indexProfile
+	}{Kind: kind.Key, Items: items}
+	renderPage(w, indexTmpl, data, "Profiles", "Bambu Profile Manager", "", "profiles", "")
 }
 
 var liveProfileTmpl = template.Must(template.New("liveProfile").Parse(`
-<p><a href="/" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; All profiles</a></p>
+<p><a href="{{if eq .Kind "process"}}/process{{else}}/{{end}}" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; All profiles</a></p>
 <div class="flex items-start gap-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-xl px-4 py-3 text-sm">
   <span>&#8505;</span>
   <div>
     <p class="font-medium">Not tracked yet</p>
-    <p class="text-blue-700/80">This is a live read straight from your Bambu Studio directory. Copy it to another printer or Import a bundle to start recording revision history and unlock Compare.</p>
+    <p class="text-blue-700/80">This is a live read straight from your Bambu Studio directory. You can already Compare it against another profile below &mdash; Copy it to another printer or Import a bundle if you also want revision history tracked.</p>
   </div>
 </div>
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
@@ -271,8 +316,8 @@ var liveProfileTmpl = template.Must(template.New("liveProfile").Parse(`
   </details>
 </section>
 <div class="flex items-center gap-4">
-  <a href="/copy" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Copy to another printer &rarr;</a>
-  <a href="/compare?item=live:{{.Name}}" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Compare with another profile &rarr;</a>
+  <a href="{{if eq .Kind "process"}}/copy/process{{else}}/copy{{end}}" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Copy to another printer &rarr;</a>
+  <a href="{{if eq .Kind "process"}}/compare?item=liveprocess:{{.Name}}{{else}}/compare?item=live:{{.Name}}{{end}}" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Compare with another profile &rarr;</a>
 </div>
 `))
 
@@ -303,8 +348,21 @@ func resolveFieldsFrom(userDir string, systemDirs []string, name string) (map[st
 }
 
 func (s *Server) handleLiveProfile(w http.ResponseWriter, r *http.Request) {
+	s.renderLiveProfile(w, r, s.filamentKind())
+}
+
+func (s *Server) handleLiveProfileProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderLiveProfile(w, r, kind)
+}
+
+func (s *Server) renderLiveProfile(w http.ResponseWriter, r *http.Request, kind profileKind) {
 	name := r.PathValue("name")
-	fields, err := s.resolveLiveFields(name)
+	fields, err := resolveFieldsFrom(kind.UserDir, kind.SystemDirs, name)
 	if errors.Is(err, storage.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -315,11 +373,12 @@ func (s *Server) handleLiveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := struct {
+		Kind    string
 		Name    string
 		Summary []summaryField
 		Color   string
 		Groups  []fieldGroup
-	}{Name: name, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
+	}{Kind: kind.Key, Name: name, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
 	renderPage(w, liveProfileTmpl, data, name, name, "", "profiles", "")
 }
 
