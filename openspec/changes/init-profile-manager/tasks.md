@@ -14,8 +14,8 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 - [x] Exit gate: discover → resolve → export → delete source → import → resolve identically — proven in `internal/bundle/roundtrip_test.go` against the real ABS fixture chain (set discarded between export and import)
 
 ## Phase 2 — Rebinding
-- [ ] Agent E: source/target binding model, target-parent mapping, chain cloning/flattening, semantic diff
-- Exit gate: X1C 0.4 → P1S 0.4 fixture passes; target resolves independently
+- [x] Agent E: source/target binding model, target-parent mapping, chain cloning/flattening, semantic diff — `internal/rebind`. Target-parent lookup takes caller-supplied candidate names rather than guessing internally (real Bambu naming isn't a consistent token substitution — confirmed: `Bambu ABS @BBL X1C` → `Bambu ABS @BBL P1S 0.4 nozzle`, not the naive swap). Multiple matching candidates → `StrategyManualRequired`, never auto-picked.
+- [x] Exit gate: X1C 0.4 → P1S 0.4 fixture passes (real profiles, `internal/rebind/rebind_test.go`); target resolves independently
 
 ## Phase 3 — Bambu round trip (highest priority)
 - [ ] Agent F: Bambu adapter (discover/validate/stage/publish/observe/verify), atomic publish + backups, reconciliation state machine, rollback
