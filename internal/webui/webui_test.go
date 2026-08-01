@@ -127,4 +127,18 @@ func TestImportThenListThenDetail(t *testing.T) {
 	if !strings.Contains(buf2.String(), "Syscode - AmazonBasics ABS 0.6") {
 		t.Fatal("index page does not list the imported profile")
 	}
+
+	deploymentsResp, err := http.Get(ts.URL + location + "/deployments")
+	if err != nil {
+		t.Fatalf("GET %s/deployments: %v", location, err)
+	}
+	defer deploymentsResp.Body.Close()
+	if deploymentsResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s/deployments status = %d, want 200", location, deploymentsResp.StatusCode)
+	}
+	buf3 := new(bytes.Buffer)
+	buf3.ReadFrom(deploymentsResp.Body)
+	if !strings.Contains(buf3.String(), "No deployments yet") {
+		t.Fatalf("deployments page for a profile with no publishes should say so: %s", buf3.String())
+	}
 }

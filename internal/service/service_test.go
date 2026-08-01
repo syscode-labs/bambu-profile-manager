@@ -165,13 +165,110 @@ func TestRebindAndPublishStopsAtInstalledLocallyWithoutRecognition(t *testing.T)
 	}
 
 	leaf := sourceSet["Syscode - AmazonBasics ABS 0.6"]
+	profile, err := repo.Profiles().Create(ctx, leaf.Name)
+	if err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
 	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
-		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, "profile-1", 1,
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, 1,
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if err != nil {
 		t.Fatalf("RebindAndPublish: %v", err)
 	}
 	if result.Deployment.State != reconcile.StateInstalledLocally {
 		t.Fatalf("state = %s, want INSTALLED_LOCALLY (must not advance past what's actually confirmed, decisions.md #6)", result.Deployment.State)
+	}
+}
+
+func TestRollbackRepublishesLastKnownGoodRevision(t *testing.T) {
+	ctx := context.Background()
+	fixtureBase := filepath.Join("..", "..", "testdata", "fixtures", "x1c-to-p1s")
+
+	sourceSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source")) {
+		sourceSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		sourceSet[k] = v
+	}
+	targetSet := loadSet(t, filepath.Join(fixtureBase, "target-system"))
+	for k, v := range sourceSet {
+		if _, ok := targetSet[k]; !ok {
+			targetSet[k] = v
+		}
+	}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	bambuDir := t.TempDir()
+	svc := &service.Service{
+		Repo:     repo,
+		Adapter:  &bambuadapter.LocalAdapter{Dir: bambuDir, IsStudioRunning: func() (bool, error) { return false, nil }},
+		Detector: reconcile.ManualDetector{Confirmed: true},
+		NewID:    newID,
+	}
+
+	const leafName = "Syscode - AmazonBasics ABS 0.6"
+	leaf := sourceSet[leafName]
+
+	// Import (revision 1) then publish a rebind to ACTIVE (revision 2) —
+	// this becomes the "last known good" state Rollback should restore.
+	var bundleBuf bytes.Buffer
+	if _, err := svc.ExportBundle(ctx, &bundleBuf, sourceSet, leafName); err != nil {
+		t.Fatalf("ExportBundle: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(bundleBuf.Bytes()), int64(bundleBuf.Len()))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+	profile, version, err := svc.ImportBundle(ctx, zr)
+	if err != nil {
+		t.Fatalf("ImportBundle: %v", err)
+	}
+
+	candidates := []string{"Bambu ABS @BBL P1S 0.4 nozzle"}
+	info := reconcile.InfoFields{"updated_time": "1", "setting_id": "id-1"}
+	goodResult, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, version.Revision+1, info, info)
+	if err != nil {
+		t.Fatalf("RebindAndPublish (establishing known-good): %v", err)
+	}
+	if goodResult.Deployment.State != reconcile.StateActive {
+		t.Fatalf("known-good publish reached %s, want ACTIVE (setup broken, not what this test checks)", goodResult.Deployment.State)
+	}
+	goodRevision := goodResult.Deployment.Revision
+
+	// Now roll back. There's nothing "bad" to undo in this test beyond
+	// proving the mechanism: republish revision `goodRevision`'s stored
+	// resolved profile as a new deployment, and it must independently reach
+	// ACTIVE again.
+	rollbackResult, err := svc.Rollback(ctx, profile.ID, info, info)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if rollbackResult.Deployment.State != reconcile.StateActive {
+		t.Fatalf("rollback deployment state = %s, want ACTIVE (history: %+v)", rollbackResult.Deployment.State, rollbackResult.Deployment.History)
+	}
+	if rollbackResult.Deployment.Revision != goodRevision+1 {
+		t.Fatalf("rollback deployment revision = %d, want %d (a new revision, not overwriting the old one)", rollbackResult.Deployment.Revision, goodRevision+1)
+	}
+
+	obs, err := svc.Adapter.Observe(ctx, filepath.Join(bambuDir, leafName+".json"))
+	if err != nil {
+		t.Fatalf("Observe published file: %v", err)
+	}
+	if obs.Fields["inherits"] != "Bambu ABS @BBL P1S 0.4 nozzle" {
+		t.Fatalf("rolled-back file inherits=%v, want the restored known-good parent", obs.Fields["inherits"])
+	}
+
+	deployments, err := repo.Deployments().ListByProfile(ctx, profile.ID)
+	if err != nil {
+		t.Fatalf("ListByProfile: %v", err)
+	}
+	if len(deployments) != 2 {
+		t.Fatalf("stored %d deployments, want 2 (the original publish + the rollback)", len(deployments))
 	}
 }

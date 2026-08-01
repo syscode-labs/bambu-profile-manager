@@ -5,6 +5,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/syscod3/bambu-profile-manager/internal/domain"
+	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
 )
 
@@ -40,6 +42,15 @@ CREATE TABLE IF NOT EXISTS domain_events (
 	revision   INTEGER NOT NULL,
 	payload    BLOB NOT NULL,
 	created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deployments (
+	id          TEXT PRIMARY KEY,
+	profile_id  TEXT NOT NULL REFERENCES profiles(id),
+	revision    INTEGER NOT NULL,
+	state       TEXT NOT NULL,
+	history     BLOB NOT NULL, -- JSON array of reconcile.Transition
+	updated_at  INTEGER NOT NULL
 );
 `
 
@@ -84,9 +95,10 @@ func Open(path string) (*Repository, error) {
 
 func (r *Repository) Close() error { return r.db.Close() }
 
-func (r *Repository) Profiles() storage.ProfileRepository { return profileRepo{r.db} }
-func (r *Repository) Versions() storage.VersionRepository { return versionRepo{r.db} }
-func (r *Repository) Events() storage.EventRepository     { return eventRepo{r.db} }
+func (r *Repository) Profiles() storage.ProfileRepository       { return profileRepo{r.db} }
+func (r *Repository) Versions() storage.VersionRepository       { return versionRepo{r.db} }
+func (r *Repository) Events() storage.EventRepository           { return eventRepo{r.db} }
+func (r *Repository) Deployments() storage.DeploymentRepository { return deploymentRepo{r.db} }
 
 func (r *Repository) WithinTransaction(ctx context.Context, fn func(ctx context.Context, tx storage.Repository) error) error {
 	sqlTx, err := r.db.BeginTx(ctx, nil)
@@ -112,9 +124,10 @@ type txRepository struct {
 }
 
 func (t *txRepository) Close() error { return nil } // lifecycle owned by the outer Repository
-func (t *txRepository) Profiles() storage.ProfileRepository { return profileRepo{t.tx} }
-func (t *txRepository) Versions() storage.VersionRepository { return versionRepo{t.tx} }
-func (t *txRepository) Events() storage.EventRepository     { return eventRepo{t.tx} }
+func (t *txRepository) Profiles() storage.ProfileRepository       { return profileRepo{t.tx} }
+func (t *txRepository) Versions() storage.VersionRepository       { return versionRepo{t.tx} }
+func (t *txRepository) Events() storage.EventRepository           { return eventRepo{t.tx} }
+func (t *txRepository) Deployments() storage.DeploymentRepository { return deploymentRepo{t.tx} }
 func (t *txRepository) WithinTransaction(ctx context.Context, fn func(ctx context.Context, tx storage.Repository) error) error {
 	return fn(ctx, t) // already inside a transaction; nesting just reuses it
 }
@@ -295,4 +308,65 @@ func (r eventRepo) ListSince(ctx context.Context, sequence int64) ([]domain.Doma
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// --- deployments ---
+
+type deploymentRepo struct{ ex executor }
+
+func (r deploymentRepo) Save(ctx context.Context, d reconcile.Deployment) error {
+	historyJSON, err := json.Marshal(d.History)
+	if err != nil {
+		return fmt.Errorf("sqlite: marshal deployment history: %w", err)
+	}
+	_, err = r.ex.ExecContext(ctx,
+		`INSERT INTO deployments (id, profile_id, revision, state, history, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET state = excluded.state, history = excluded.history, updated_at = excluded.updated_at`,
+		d.ID, d.ProfileID, d.Revision, string(d.State), historyJSON, time.Now().UTC().Unix())
+	if err != nil {
+		return fmt.Errorf("sqlite: save deployment: %w", err)
+	}
+	return nil
+}
+
+func (r deploymentRepo) Get(ctx context.Context, id string) (reconcile.Deployment, error) {
+	row := r.ex.QueryRowContext(ctx,
+		`SELECT id, profile_id, revision, state, history FROM deployments WHERE id = ?`, id)
+	return scanDeployment(row)
+}
+
+func (r deploymentRepo) ListByProfile(ctx context.Context, profileID string) ([]reconcile.Deployment, error) {
+	rows, err := r.ex.QueryContext(ctx,
+		`SELECT id, profile_id, revision, state, history FROM deployments WHERE profile_id = ? ORDER BY revision ASC`, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list deployments: %w", err)
+	}
+	defer rows.Close()
+	var out []reconcile.Deployment
+	for rows.Next() {
+		d, err := scanDeployment(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func scanDeployment(row rowScanner) (reconcile.Deployment, error) {
+	var d reconcile.Deployment
+	var state string
+	var historyJSON []byte
+	if err := row.Scan(&d.ID, &d.ProfileID, &d.Revision, &state, &historyJSON); err != nil {
+		if err == sql.ErrNoRows {
+			return reconcile.Deployment{}, storage.ErrNotFound
+		}
+		return reconcile.Deployment{}, fmt.Errorf("sqlite: scan deployment: %w", err)
+	}
+	d.State = reconcile.State(state)
+	if err := json.Unmarshal(historyJSON, &d.History); err != nil {
+		return reconcile.Deployment{}, fmt.Errorf("sqlite: unmarshal deployment history: %w", err)
+	}
+	return d, nil
 }

@@ -28,6 +28,7 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /profiles/{id}", s.handleProfile)
+	mux.HandleFunc("GET /profiles/{id}/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /import", s.handleImportForm)
 	mux.HandleFunc("POST /import", s.handleImport)
 	return mux
@@ -63,6 +64,7 @@ var profileTmpl = template.Must(template.New("profile").Parse(`<!doctype html>
 <ul>
 {{range .All}}<li>Revision {{.Revision}}: <code>{{.SemanticHash}}</code></li>{{end}}
 </ul>
+<p><a href="/profiles/{{.Profile.ID}}/deployments">Deployment history &rarr;</a></p>
 </body></html>`))
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -92,6 +94,40 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		ResolvedJSON string
 	}{Profile: p, Latest: latest, All: all, ResolvedJSON: string(latest.ResolvedJSON)}
 	renderOrError(w, profileTmpl, data)
+}
+
+var deploymentsTmpl = template.Must(template.New("deployments").Parse(`<!doctype html>
+<html><head><title>Deployments: {{.Profile.Name}}</title></head><body>
+<p><a href="/profiles/{{.Profile.ID}}">&larr; {{.Profile.Name}}</a></p>
+<h1>Deployment history</h1>
+{{range .Deployments}}
+<h3>Revision {{.Revision}} &mdash; {{.State}}</h3>
+<ul>
+{{range .History}}<li>{{.At.Format "2006-01-02 15:04:05"}}: {{.From}} &rarr; {{.To}}{{if .Reason}} ({{.Reason}}){{end}}</li>{{end}}
+</ul>
+{{else}}<p>No deployments yet.</p>{{end}}
+</body></html>`))
+
+func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := r.PathValue("id")
+
+	p, err := s.Svc.Repo.Profiles().Get(ctx, id)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	deployments, err := s.Svc.Repo.Deployments().ListByProfile(ctx, id)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+
+	data := struct {
+		Profile     any
+		Deployments any
+	}{Profile: p, Deployments: deployments}
+	renderOrError(w, deploymentsTmpl, data)
 }
 
 var importFormTmpl = template.Must(template.New("import").Parse(`<!doctype html>

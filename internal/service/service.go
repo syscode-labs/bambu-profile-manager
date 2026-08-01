@@ -8,9 +8,11 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
 	"github.com/syscod3/bambu-profile-manager/internal/bundle"
@@ -134,18 +136,127 @@ func (s *Service) RebindAndPublish(
 	}
 	result.Rebind = rb
 	if rb.Strategy == rebind.StrategyManualRequired {
+		// dep never left DRAFT (rebind couldn't even produce a candidate) —
+		// nothing worth persisting yet, unlike publishFlow's states.
 		return result, fmt.Errorf("service: rebind: ambiguous target parent, candidates=%v: manual selection required", rb.Candidates)
 	}
 
-	if err := s.Adapter.Validate(ctx, rb.TargetProfile); err != nil {
+	return s.publishFlow(ctx, dep, result, rb.TargetProfile, beforeInfo, afterInfo)
+}
+
+// Rollback finds profileID's most recent Deployment that reached ACTIVE and
+// republishes that revision's stored resolved profile, going through the
+// same publish/verify machinery as a normal publish — a rollback still has
+// to prove Studio picked it up, not just write a file (design.md §4,
+// decisions.md #6).
+func (s *Service) Rollback(ctx context.Context, profileID string, beforeInfo, afterInfo reconcile.InfoFields) (*PublishResult, error) {
+	deployments, err := s.Repo.Deployments().ListByProfile(ctx, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("service: rollback: list deployments: %w", err)
+	}
+	if len(deployments) == 0 {
+		return nil, fmt.Errorf("service: rollback: no deployments found for profile %s", profileID)
+	}
+
+	var lastGood *reconcile.Deployment
+	for i := len(deployments) - 1; i >= 0; i-- {
+		if deployments[i].State == reconcile.StateActive {
+			d := deployments[i]
+			lastGood = &d
+			break
+		}
+	}
+	if lastGood == nil {
+		return nil, fmt.Errorf("service: rollback: no previously ACTIVE deployment found for profile %s", profileID)
+	}
+
+	versions, err := s.Repo.Versions().List(ctx, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("service: rollback: list versions: %w", err)
+	}
+	var resolvedJSON []byte
+	for _, v := range versions {
+		if v.Revision == lastGood.Revision {
+			resolvedJSON = v.ResolvedJSON
+			break
+		}
+	}
+	if resolvedJSON == nil {
+		return nil, fmt.Errorf("service: rollback: no stored version for profile %s revision %d", profileID, lastGood.Revision)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(resolvedJSON, &fields); err != nil {
+		return nil, fmt.Errorf("service: rollback: decode resolved json: %w", err)
+	}
+
+	p, err := s.Repo.Profiles().Get(ctx, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("service: rollback: profile: %w", err)
+	}
+	targetProfile := &domain.RawProfile{Name: p.Name, Fields: fields}
+
+	id, err := s.NewID()
+	if err != nil {
+		return nil, fmt.Errorf("service: rollback: new deployment id: %w", err)
+	}
+	newRevision := deployments[len(deployments)-1].Revision + 1
+	dep := reconcile.New(id, profileID, newRevision)
+	result := &PublishResult{Deployment: dep}
+
+	return s.publishFlow(ctx, dep, result, targetProfile, beforeInfo, afterInfo)
+}
+
+// publishFlow is the shared tail of RebindAndPublish and Rollback: validate
+// -> stage -> publish -> (caller confirms Studio was reopened) -> observe
+// -> verify -> advance the state machine. It never advances further than it
+// can actually prove (decisions.md #6): it stops at INSTALLED_LOCALLY if
+// recognition hasn't been observed yet, and stops at SYNC_OBSERVED (never
+// ACTIVE) unless the observed semantic hash truly matches.
+func (s *Service) publishFlow(
+	ctx context.Context,
+	dep *reconcile.Deployment,
+	result *PublishResult,
+	targetProfile *domain.RawProfile,
+	beforeInfo, afterInfo reconcile.InfoFields,
+) (*PublishResult, error) {
+	defer func() {
+		if saveErr := s.Repo.Deployments().Save(ctx, *dep); saveErr != nil {
+			fmt.Fprintf(os.Stderr, "service: save deployment %s: %v\n", dep.ID, saveErr)
+		}
+	}()
+
+	if err := s.Adapter.Validate(ctx, targetProfile); err != nil {
 		_ = dep.Advance(reconcile.StateDependencyMissing, err.Error())
 		return result, fmt.Errorf("service: validate: %w", err)
 	}
-	if err := dep.Advance(reconcile.StateValidated, "rebind produced a valid candidate"); err != nil {
+	if err := dep.Advance(reconcile.StateValidated, "candidate is valid"); err != nil {
 		return result, err
 	}
 
-	staged, err := s.Adapter.Stage(ctx, rb.TargetProfile)
+	// Record what's about to be published as this deployment's revision, so
+	// Rollback can find and republish it later. targetProfile.Fields is
+	// exactly what Adapter.Publish will write to disk, so it's used as both
+	// SourceJSON and ResolvedJSON here — there's no separate "flattened"
+	// form beyond what's actually live.
+	fieldsJSON, err := jsonMarshal(targetProfile.Fields)
+	if err != nil {
+		return result, err
+	}
+	hash, err := hashOf(targetProfile.Fields)
+	if err != nil {
+		return result, err
+	}
+	if _, err := s.Repo.Versions().Create(ctx, domain.ProfileVersion{
+		ProfileID:    dep.ProfileID,
+		Revision:     dep.Revision,
+		SourceJSON:   fieldsJSON,
+		ResolvedJSON: fieldsJSON,
+		SemanticHash: hash,
+	}); err != nil {
+		return result, fmt.Errorf("service: record version: %w", err)
+	}
+
+	staged, err := s.Adapter.Stage(ctx, targetProfile)
 	if err != nil {
 		return result, fmt.Errorf("service: stage: %w", err)
 	}
@@ -184,7 +295,7 @@ func (s *Service) RebindAndPublish(
 		return result, err
 	}
 
-	expectedHash, err := hashOf(rb.TargetProfile.Fields)
+	expectedHash, err := hashOf(targetProfile.Fields)
 	if err != nil {
 		return result, err
 	}

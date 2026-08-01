@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/syscod3/bambu-profile-manager/internal/domain"
+	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
 )
 
@@ -159,6 +160,59 @@ func Run(t *testing.T, newRepo func(t *testing.T) storage.Repository) {
 		_, err = repo.Profiles().GetByName(ctx, "rolled-back")
 		if !errors.Is(err, storage.ErrNotFound) {
 			t.Fatalf("profile from rolled-back tx is visible: err=%v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("deployments save, get, and list by profile, upserting by ID", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		p, err := repo.Profiles().Create(ctx, "deploy-target")
+		if err != nil {
+			t.Fatalf("Create profile: %v", err)
+		}
+
+		d := reconcile.New("dep-1", p.ID, 1)
+		if err := d.Advance(reconcile.StateValidated, "ok"); err != nil {
+			t.Fatalf("Advance: %v", err)
+		}
+		if err := repo.Deployments().Save(ctx, *d); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+
+		got, err := repo.Deployments().Get(ctx, d.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.State != reconcile.StateValidated || len(got.History) != 1 {
+			t.Fatalf("Get = %+v, want State=VALIDATED with 1 history entry", got)
+		}
+
+		// Save again with the same ID (further advanced) must upsert, not duplicate.
+		if err := d.Advance(reconcile.StateStaged, "staged"); err != nil {
+			t.Fatalf("Advance: %v", err)
+		}
+		if err := repo.Deployments().Save(ctx, *d); err != nil {
+			t.Fatalf("Save (update): %v", err)
+		}
+
+		list, err := repo.Deployments().ListByProfile(ctx, p.ID)
+		if err != nil {
+			t.Fatalf("ListByProfile: %v", err)
+		}
+		if len(list) != 1 {
+			t.Fatalf("ListByProfile returned %d deployments, want 1 (Save must upsert by ID)", len(list))
+		}
+		if list[0].State != reconcile.StateStaged || len(list[0].History) != 2 {
+			t.Fatalf("ListByProfile[0] = %+v, want State=STAGED with 2 history entries", list[0])
+		}
+	})
+
+	t.Run("deployment not found", func(t *testing.T) {
+		repo := newRepo(t)
+		_, err := repo.Deployments().Get(context.Background(), "does-not-exist")
+		if !errors.Is(err, storage.ErrNotFound) {
+			t.Fatalf("Get(missing) = %v, want ErrNotFound", err)
 		}
 	})
 }
