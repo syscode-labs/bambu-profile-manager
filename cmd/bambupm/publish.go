@@ -98,7 +98,7 @@ func cmdPublish(args []string) {
 		BackupsDir: backupsDir,
 	}
 
-	result, err := svc.RebindAndPublish(ctx, set, set, leaf, candidates, profile.ID, targetName,
+	result, err := svc.RebindAndPublish(ctx, set, set, leaf, candidates, profile.ID, targetName, "",
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "publish:", err)
@@ -310,7 +310,7 @@ func cmdCopy(args []string) {
 		BackupsDir: backupsDir,
 	}
 
-	result, err := svc.RebindAndPublish(ctx, set, set, leaf, candidates, profile.ID, confirmName,
+	result, err := svc.RebindAndPublish(ctx, set, set, leaf, candidates, profile.ID, confirmName, "",
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "copy:", err)

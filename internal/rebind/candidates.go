@@ -105,6 +105,81 @@ func IsAlreadyCompatible(sourceSet resolver.Set, leaf *domain.RawProfile, target
 	return compatiblePrintersInclude(effective.Fields, targetPrinterName), nil
 }
 
+// FindCandidateParentsBySameFamily searches targetSet for every profile
+// under the same family root as leaf (see resolver.RootAncestorName),
+// regardless of compatible_printers. Used as a fallback when nothing is
+// verified compatible with the target printer: rather than refuse outright,
+// the caller can offer these as real, existing base profiles the user picks
+// from — none of them are confirmed to already work on that printer, but
+// AddCompatiblePrinter can patch the chosen one so it does (see its doc
+// comment). Never picks one itself — same "list candidates, caller decides"
+// contract as FindCandidateParents/FindCandidateParentsByCompatiblePrinters.
+func FindCandidateParentsBySameFamily(sourceSet, targetSet resolver.Set, leaf *domain.RawProfile) ([]string, error) {
+	rootName, err := resolver.RootAncestorName(sourceSet, leaf)
+	if err != nil {
+		return nil, fmt.Errorf("rebind: find candidates by family: source root ancestor: %w", err)
+	}
+
+	var candidates []string
+	for name, p := range targetSet {
+		if name == leaf.Name {
+			continue
+		}
+		// Abstract shared templates (fdm_filament_abs, fdm_process_common,
+		// ...) trivially satisfy "same root ancestor as themselves" — real
+		// selectable profiles mark instantiation:"true"; Bambu's own
+		// internal-only templates mark it "false" (confirmed against the
+		// real system catalog). Absent entirely (typical for a plain user
+		// leaf) still counts as selectable.
+		if inst, ok := p.Fields["instantiation"].(string); ok && inst == "false" {
+			continue
+		}
+		candidateRoot, err := resolver.RootAncestorName(targetSet, p)
+		if err != nil || candidateRoot != rootName {
+			continue
+		}
+		candidates = append(candidates, name)
+	}
+	sort.Strings(candidates)
+	return candidates, nil
+}
+
+// AddCompatiblePrinter patches target's own compatible_printers field so it
+// explicitly includes printerName, unioned with parentName's *resolved*
+// (inherited) compatible_printers — used when the user picks a same-family
+// parent from FindCandidateParentsBySameFamily that Bambu's own catalog
+// does not yet list as compatible with printerName, and explicitly confirms
+// they want it made compatible rather than just guessing blind. parentName
+// is looked up in targetSet (it must be the same parent Rebind mapped
+// target onto). Overriding on target itself (rather than editing the
+// shared parent) keeps every other profile inheriting that parent
+// unaffected.
+func AddCompatiblePrinter(targetSet resolver.Set, target *domain.RawProfile, parentName, printerName string) error {
+	parent, ok := targetSet[parentName]
+	if !ok {
+		return fmt.Errorf("rebind: add compatible printer: parent %q not found", parentName)
+	}
+	effective, _, err := resolver.Resolve(targetSet, parent)
+	if err != nil {
+		return fmt.Errorf("rebind: add compatible printer: resolve parent: %w", err)
+	}
+
+	existing, _ := effective.Fields["compatible_printers"].([]any)
+	seen := make(map[string]bool, len(existing)+1)
+	merged := make([]any, 0, len(existing)+1)
+	for _, v := range existing {
+		if str, ok := v.(string); ok && !seen[str] {
+			seen[str] = true
+			merged = append(merged, str)
+		}
+	}
+	if !seen[printerName] {
+		merged = append(merged, printerName)
+	}
+	target.Fields["compatible_printers"] = merged
+	return nil
+}
+
 func compatiblePrintersInclude(fields map[string]any, targetPrinterName string) bool {
 	raw, ok := fields["compatible_printers"]
 	if !ok {

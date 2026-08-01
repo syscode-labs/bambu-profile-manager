@@ -166,6 +166,14 @@ type PublishResult struct {
 // that doesn't advance with reality risks a UNIQUE(profile_id, revision)
 // conflict on retry, or the reverse: two independent callers colliding on
 // the same number they both computed by hand.
+// addCompatiblePrinter, when non-empty, patches the rebound profile's own
+// compatible_printers to explicitly include that printer (see
+// rebind.AddCompatiblePrinter) — used when targetParentCandidates was
+// matched by family only (rebind.FindCandidateParentsBySameFamily), not by
+// Bambu's own compatible_printers list, and the caller has an explicit
+// user confirmation to make it compatible rather than just publishing it
+// unverified. Ignored for any strategy other than StrategyMapToTargetParent
+// (nothing to patch relative to a parent if there wasn't one).
 func (s *Service) RebindAndPublish(
 	ctx context.Context,
 	sourceSet, targetSet resolver.Set,
@@ -173,6 +181,7 @@ func (s *Service) RebindAndPublish(
 	targetParentCandidates []string,
 	profileID string,
 	targetName string,
+	addCompatiblePrinter string,
 	beforeInfo, afterInfo reconcile.InfoFields,
 ) (*PublishResult, error) {
 	id, err := s.NewID()
@@ -199,6 +208,11 @@ func (s *Service) RebindAndPublish(
 	if targetName != "" && targetName != rb.TargetProfile.Name {
 		rb.TargetProfile.Name = targetName
 		rb.TargetProfile.Fields = cloneWithName(rb.TargetProfile.Fields, targetName)
+	}
+	if addCompatiblePrinter != "" && rb.Strategy == rebind.StrategyMapToTargetParent {
+		if err := rebind.AddCompatiblePrinter(targetSet, rb.TargetProfile, rb.MatchedCandidate, addCompatiblePrinter); err != nil {
+			return result, fmt.Errorf("service: add compatible printer: %w", err)
+		}
 	}
 
 	return s.publishFlow(ctx, dep, result, rb.TargetProfile, beforeInfo, afterInfo)

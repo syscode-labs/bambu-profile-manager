@@ -2,6 +2,7 @@ package webui_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -156,13 +157,15 @@ func TestCopyFormListsLiveProfiles(t *testing.T) {
 // that combination doesn't physically exist) — user asked to still be able
 // to publish standalone if they explicitly acknowledge it's unverified,
 // rather than being fully blocked.
-func TestCopyPreviewOffersUnverifiedPublishWhenNoCandidateFound(t *testing.T) {
+func TestCopyPreviewOffersFamilyCandidatesWithDiffWhenNoVerifiedMatch(t *testing.T) {
 	ts, liveDir, _ := newTestServerWithLiveDir(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 	// "P1P" isn't present anywhere in this fixture set (confirmed by
 	// TestFindCandidateParentsNoMatchForWrongMaterial), so this is a
-	// genuine zero-candidate case.
+	// genuine zero-verified-candidate case — but the profile's own real
+	// material family (fdm_filament_abs) does have real, existing sibling
+	// profiles bambupm can offer instead of a dead end.
 	previewResp, err := http.PostForm(ts.URL+"/copy/preview", map[string][]string{
 		"name":          {"Syscode - AmazonBasics ABS 0.6"},
 		"printer_token": {"P1P"},
@@ -173,18 +176,30 @@ func TestCopyPreviewOffersUnverifiedPublishWhenNoCandidateFound(t *testing.T) {
 	defer previewResp.Body.Close()
 	previewBody, _ := io.ReadAll(previewResp.Body)
 	previewStr := string(previewBody)
-	if !strings.Contains(previewStr, "No matching parent found") {
-		t.Fatalf("preview missing the no-match warning: %s", previewStr)
+	if !strings.Contains(previewStr, "isn't listed as compatible with any base profile") {
+		t.Fatalf("preview missing the not-verified warning: %s", previewStr)
+	}
+	if !strings.Contains(previewStr, "Bambu ABS @BBL X1C") {
+		t.Fatalf("preview missing a real same-family candidate: %s", previewStr)
 	}
 	if !strings.Contains(previewStr, `name="confirm_unverified"`) {
-		t.Fatalf("preview missing the unverified-publish checkbox: %s", previewStr)
+		t.Fatalf("preview missing the confirm-and-add-compatibility checkbox: %s", previewStr)
+	}
+	if !strings.Contains(previewStr, "would change from your current profile") {
+		t.Fatalf("preview missing the per-candidate settings diff: %s", previewStr)
+	}
+	if !strings.Contains(previewStr, `name="printer_canonical" value="P1P"`) {
+		t.Fatalf("preview missing the printer_canonical hidden field: %s", previewStr)
 	}
 
-	// Submitting without the checkbox must still be rejected.
+	// Submitting without the checkbox must still be rejected, even though
+	// the parent itself is real (server-side backstop, not just the
+	// client-side "required" attribute).
 	blockedResp, err := client.PostForm(ts.URL+"/copy/publish", map[string][]string{
-		"name":         {"Syscode - AmazonBasics ABS 0.6"},
-		"parent":       {""},
-		"confirm_name": {"Should Not Publish @P1P"},
+		"name":              {"Syscode - AmazonBasics ABS 0.6"},
+		"parent":            {"Bambu ABS @BBL X1C"},
+		"printer_canonical": {"P1P"},
+		"confirm_name":      {"Should Not Publish @P1P"},
 	})
 	if err != nil {
 		t.Fatalf("POST /copy/publish (no checkbox): %v", err)
@@ -197,7 +212,8 @@ func TestCopyPreviewOffersUnverifiedPublishWhenNoCandidateFound(t *testing.T) {
 	const newName = "Unverified Copy @P1P"
 	publishResp, err := client.PostForm(ts.URL+"/copy/publish", map[string][]string{
 		"name":               {"Syscode - AmazonBasics ABS 0.6"},
-		"parent":             {""},
+		"parent":             {"Bambu ABS @BBL X1C"},
+		"printer_canonical":  {"P1P"},
 		"confirm_unverified": {"on"},
 		"confirm_name":       {newName},
 	})
@@ -209,19 +225,30 @@ func TestCopyPreviewOffersUnverifiedPublishWhenNoCandidateFound(t *testing.T) {
 		t.Fatalf("POST /copy/publish status = %d, want 200", publishResp.StatusCode)
 	}
 	publishBody, _ := io.ReadAll(publishResp.Body)
-	if !strings.Contains(string(publishBody), "(none — published standalone, unverified)") {
-		t.Fatalf("publish result did not show the standalone/unverified parent note: %s", publishBody)
+	if !strings.Contains(string(publishBody), "Added") || !strings.Contains(string(publishBody), "P1P") {
+		t.Fatalf("publish result did not show the added-compatibility note: %s", publishBody)
 	}
 
-	if _, err := os.Stat(filepath.Join(liveDir, newName+".json")); err != nil {
-		t.Fatalf("published file missing on disk: %v", err)
-	}
 	published, err := os.ReadFile(filepath.Join(liveDir, newName+".json"))
 	if err != nil {
 		t.Fatalf("read published file: %v", err)
 	}
-	if strings.Contains(string(published), `"inherits"`) {
-		t.Fatalf("flattened publish should have no inherits field, got: %s", published)
+	var fields map[string]any
+	if err := json.Unmarshal(published, &fields); err != nil {
+		t.Fatalf("parse published file: %v", err)
+	}
+	if fields["inherits"] != "Bambu ABS @BBL X1C" {
+		t.Fatalf("published inherits = %v, want the chosen family parent", fields["inherits"])
+	}
+	cp, _ := fields["compatible_printers"].([]any)
+	var found bool
+	for _, v := range cp {
+		if v == "P1P" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("published compatible_printers = %v, want it to include the added P1P", cp)
 	}
 }
 

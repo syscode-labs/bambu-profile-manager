@@ -141,6 +141,75 @@ func TestFindCandidateParentsByCompatiblePrintersNoMatch(t *testing.T) {
 	}
 }
 
+func TestFindCandidateParentsBySameFamilyExcludesAbstractTemplates(t *testing.T) {
+	set := processFixtureSet(t)
+	// Mark the shared root abstract, like Bambu's real fdm_process_single_0.20
+	// does (instantiation:"false") — real bug found while building this: the
+	// root ancestor of a leaf's own chain trivially satisfies "same root as
+	// itself", so without this filter it would show up as a pickable parent
+	// even though it's an internal-only template no one selects directly.
+	set["fdm_process_single_0.20"].Fields["instantiation"] = "false"
+	leaf := set["My Custom @BBL X1C"]
+
+	got, err := rebind.FindCandidateParentsBySameFamily(set, set, leaf)
+	if err != nil {
+		t.Fatalf("FindCandidateParentsBySameFamily: %v", err)
+	}
+	want := []string{"0.20mm Standard @BBL A1", "0.20mm Standard @BBL X1C"}
+	if len(got) != len(want) {
+		t.Fatalf("FindCandidateParentsBySameFamily = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("FindCandidateParentsBySameFamily = %v, want %v", got, want)
+		}
+	}
+	for _, name := range got {
+		if name == "fdm_process_single_0.20" {
+			t.Fatal("FindCandidateParentsBySameFamily included the abstract root template")
+		}
+	}
+}
+
+func TestAddCompatiblePrinterUnionsWithParentsResolvedList(t *testing.T) {
+	set := processFixtureSet(t)
+	target := &domain.RawProfile{Name: "New Copy", Fields: map[string]any{"name": "New Copy"}}
+
+	if err := rebind.AddCompatiblePrinter(set, target, "0.20mm Standard @BBL A1", "Bambu Lab H2S 0.4 nozzle"); err != nil {
+		t.Fatalf("AddCompatiblePrinter: %v", err)
+	}
+	got, _ := target.Fields["compatible_printers"].([]any)
+	want := []any{"Bambu Lab A1 0.4 nozzle", "Bambu Lab H2S 0.4 nozzle"}
+	if len(got) != len(want) {
+		t.Fatalf("compatible_printers = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("compatible_printers = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestAddCompatiblePrinterNoOpWhenAlreadyListed(t *testing.T) {
+	set := processFixtureSet(t)
+	target := &domain.RawProfile{Name: "New Copy", Fields: map[string]any{"name": "New Copy"}}
+
+	// X1C's parent already lists P1S — adding it again must not duplicate.
+	if err := rebind.AddCompatiblePrinter(set, target, "0.20mm Standard @BBL X1C", "Bambu Lab P1S 0.4 nozzle"); err != nil {
+		t.Fatalf("AddCompatiblePrinter: %v", err)
+	}
+	got, _ := target.Fields["compatible_printers"].([]any)
+	count := 0
+	for _, v := range got {
+		if v == "Bambu Lab P1S 0.4 nozzle" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("compatible_printers = %v, want exactly one P1S entry, got %d", got, count)
+	}
+}
+
 func TestFindCandidateParentsFeedsRebindDirectly(t *testing.T) {
 	sourceSet, targetSet := fixtureSets(t)
 	leaf := sourceSet["Syscode - AmazonBasics ABS 0.6"]

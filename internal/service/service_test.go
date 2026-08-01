@@ -112,7 +112,7 @@ func TestAcceptanceFlowImportRebindPublishVerify(t *testing.T) {
 	before := reconcile.InfoFields{"updated_time": "100", "setting_id": ""}
 	after := reconcile.InfoFields{"updated_time": "200", "setting_id": "PFUSnew"}
 
-	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", before, after)
+	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", "", before, after)
 	if err != nil {
 		t.Fatalf("RebindAndPublish: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestRebindAndPublishStopsAtInstalledLocallyWithoutRecognition(t *testing.T)
 		t.Fatalf("Create profile: %v", err)
 	}
 	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
-		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, "",
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, "", "",
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if err != nil {
 		t.Fatalf("RebindAndPublish: %v", err)
@@ -234,7 +234,7 @@ func TestRollbackRepublishesLastKnownGoodRevision(t *testing.T) {
 
 	candidates := []string{"Bambu ABS @BBL P1S 0.4 nozzle"}
 	info := reconcile.InfoFields{"updated_time": "1", "setting_id": "id-1"}
-	goodResult, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", info, info)
+	goodResult, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", "", info, info)
 	if err != nil {
 		t.Fatalf("RebindAndPublish (establishing known-good): %v", err)
 	}
@@ -319,7 +319,7 @@ func TestRetryAfterStudioRunningReusesTheSameRevision(t *testing.T) {
 	candidates := []string{"Bambu ABS @BBL P1S 0.4 nozzle"}
 	info := reconcile.InfoFields{}
 
-	first, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", info, info)
+	first, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", "", info, info)
 	if err == nil || !errors.Is(err, bambuadapter.ErrStudioRunning) {
 		t.Fatalf("first attempt error = %v, want ErrStudioRunning", err)
 	}
@@ -329,7 +329,7 @@ func TestRetryAfterStudioRunningReusesTheSameRevision(t *testing.T) {
 	firstRevision := first.Deployment.Revision
 
 	studioRunning = false // user closed Bambu Studio
-	second, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", info, info)
+	second, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", "", info, info)
 	if err != nil {
 		t.Fatalf("retry after closing Studio: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestCheckRecognitionResumesAfterInstalledLocally(t *testing.T) {
 	}
 
 	first, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
-		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, "",
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, "", "",
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if err != nil {
 		t.Fatalf("RebindAndPublish: %v", err)
@@ -518,7 +518,7 @@ func TestPublishTakesBackupAndCanBeRestored(t *testing.T) {
 	}
 
 	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
-		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, "",
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, "", "",
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if err != nil {
 		t.Fatalf("RebindAndPublish: %v", err)

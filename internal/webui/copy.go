@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
+	"github.com/syscod3/bambu-profile-manager/internal/domain"
 	"github.com/syscod3/bambu-profile-manager/internal/rebind"
 	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
 	"github.com/syscod3/bambu-profile-manager/internal/resolver"
@@ -300,24 +301,41 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
   <div class="flex items-start gap-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-sm">
     <span>&#9888;</span>
     <div>
-      <p class="font-medium">No matching parent found under "{{.PrinterToken}}" for this profile's family</p>
-      <p class="text-amber-700/80">Nothing in your library is confirmed compatible with that printer at this profile's tier &mdash; bambupm cannot verify the result will behave the way it does on the printer you built it for. You can still publish it standalone (its settings baked in directly, no inherited parent) if you're confident it's fine.</p>
+      <p class="font-medium">"{{.PrinterToken}}" isn't listed as compatible with any base profile in this family yet</p>
+      {{if .FamilyCandidates}}
+      <p class="text-amber-700/80">These {{len .FamilyCandidates}} profiles share the same family as the one you're copying, but none of them have "{{.PrinterToken}}" in their compatible-printer list &mdash; so bambupm can't verify the result will actually work there, and won't pick one for you. Open a candidate's diff to see what would change, then check its box to have bambupm add "{{.PrinterToken}}" to it and publish.</p>
+      {{else}}
+      <p class="text-amber-700/80">No profile in your library even shares this one's family &mdash; there's nothing safe to build from.</p>
+      {{end}}
     </div>
   </div>
-  <form method="post" action="{{$publishAction}}" class="space-y-3">
-    <input type="hidden" name="name" value="{{.Name}}">
-    <input type="hidden" name="parent" value="">
-    <label class="flex items-start gap-2 text-sm text-zinc-600">
-      <input type="checkbox" name="confirm_unverified" required class="mt-0.5">
-      I understand this hasn't been verified compatible with "{{.PrinterToken}}" and want to publish it standalone anyway.
+  {{$name := .Name}}{{$token := .PrinterToken}}{{$printer := .PrinterCanonical}}
+  {{range .FamilyCandidates}}
+  <form method="post" action="{{$publishAction}}" class="border border-amber-200 rounded-xl p-4 space-y-3">
+    <input type="hidden" name="name" value="{{$name}}">
+    <input type="hidden" name="parent" value="{{.Name}}">
+    <input type="hidden" name="printer_canonical" value="{{$printer}}">
+    <p class="text-sm font-medium">{{.Name}}</p>
+    {{if .Diff}}
+    <details class="text-xs">
+      <summary class="cursor-pointer text-zinc-500 hover:text-zinc-800">{{len .Diff}} setting{{if ne (len .Diff) 1}}s{{end}} would change from your current profile</summary>
+      <div class="mt-2 rounded-lg border border-zinc-100 divide-y divide-zinc-50">
+      {{range .Diff}}<div class="flex justify-between gap-3 px-3 py-1.5"><span class="text-zinc-500">{{.Label}}</span><span class="font-mono text-right"><span class="text-zinc-400 line-through">{{.Source}}</span> &rarr; {{.Target}}</span></div>{{end}}
+      </div>
+    </details>
+    {{else}}<p class="text-xs text-zinc-400">No settings would change &mdash; identical to your current profile.</p>{{end}}
+    <label class="flex items-center gap-2 text-xs text-amber-800">
+      <input type="checkbox" name="confirm_unverified" required class="shrink-0">
+      Add "{{$token}}" to this profile and publish
     </label>
     <label class="block">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">New profile name</span>
-      <input type="text" name="confirm_name" value="{{.Name}} @{{.PrinterToken}}" required
+      <input type="text" name="confirm_name" value="{{$name}} @{{$token}}" required
         class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
     </label>
-    <button type="submit" class="px-4 py-2 rounded-lg border border-amber-300 bg-amber-100 text-amber-900 text-sm font-medium hover:bg-amber-200 transition">Publish standalone anyway</button>
+    <button type="submit" class="px-4 py-2 rounded-lg border border-amber-300 bg-amber-100 text-amber-900 text-sm font-medium hover:bg-amber-200 transition">Publish with this parent, add compatibility</button>
   </form>
+  {{end}}
 </section>
 {{else if gt (len .Candidates) 1}}
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
@@ -397,6 +415,45 @@ func splitPrinterTarget(raw string) (token, canonical string) {
 	return token, canonical
 }
 
+// diffRow is one changed field shown on a family-fallback candidate card
+// (see renderCopyPreview) — reuses compare.go's formatValue/prettyLabel so
+// values read the same way here as everywhere else in the app.
+type diffRow struct{ Label, Source, Target string }
+
+type familyCandidate struct {
+	Name string
+	Diff []diffRow
+}
+
+func diffValueOrNotSet(key string, v any) string {
+	if v == nil {
+		return "(not set)"
+	}
+	return formatValue(key, v)
+}
+
+// familyCandidatesWithDiff computes, for each name FindCandidateParentsBySameFamily
+// returned, what rebind.Rebind would actually change relative to leaf's
+// current effective fields — so the "not verified compatible, pick anyway"
+// UI can show a real diff instead of a bare name list (user asked to see
+// this rather than just publish unverified/standalone).
+func familyCandidatesWithDiff(sourceSet, targetSet resolver.Set, leaf *domain.RawProfile, names []string) []familyCandidate {
+	out := make([]familyCandidate, 0, len(names))
+	for _, name := range names {
+		rb, err := rebind.Rebind(sourceSet, targetSet, leaf, []string{name})
+		if err != nil || rb.Strategy != rebind.StrategyMapToTargetParent {
+			continue // shouldn't happen (name came from the same targetSet) — skip defensively
+		}
+		rows := make([]diffRow, 0, len(rb.Diff))
+		for k, d := range rb.Diff {
+			rows = append(rows, diffRow{Label: prettyLabel(k), Source: diffValueOrNotSet(k, d.Source), Target: diffValueOrNotSet(k, d.Target)})
+		}
+		sort.Slice(rows, func(i, j int) bool { return rows[i].Label < rows[j].Label })
+		out = append(out, familyCandidate{Name: name, Diff: rows})
+	}
+	return out
+}
+
 func (s *Server) renderCopyPreview(w http.ResponseWriter, r *http.Request, kind profileKind) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "copy: parse form: "+err.Error(), http.StatusBadRequest)
@@ -444,13 +501,28 @@ func (s *Server) renderCopyPreview(w http.ResponseWriter, r *http.Request, kind 
 		}
 	}
 
+	var familyCandidates []familyCandidate
+	if len(candidates) == 0 && !alreadyCompatible {
+		names, ferr := rebind.FindCandidateParentsBySameFamily(set, set, leaf)
+		if ferr != nil {
+			httpError(w, ferr)
+			return
+		}
+		familyCandidates = familyCandidatesWithDiff(set, set, leaf, names)
+	}
+
 	data := struct {
 		Kind              string
 		Name              string
 		PrinterToken      string
+		PrinterCanonical  string
 		AlreadyCompatible bool
 		Candidates        []string
-	}{Kind: kind.Key, Name: name, PrinterToken: token, AlreadyCompatible: alreadyCompatible, Candidates: candidates}
+		FamilyCandidates  []familyCandidate
+	}{
+		Kind: kind.Key, Name: name, PrinterToken: token, PrinterCanonical: canonical,
+		AlreadyCompatible: alreadyCompatible, Candidates: candidates, FamilyCandidates: familyCandidates,
+	}
 	renderPage(w, copyPreviewTmpl, data, "Copy preview", "Copy preview: "+name, "&rarr; "+token, "copy", studioWarning(kind.Svc))
 }
 
@@ -459,7 +531,8 @@ var copyResultTmpl = template.Must(template.New("copyResult").Funcs(statusFuncs)
   <div class="flex items-center gap-2">
     <span title="{{.Deployment.State}}" class="text-xs font-medium px-2.5 py-1 rounded-full {{statusClasses (print .Deployment.State)}}">{{statusLabel (print .Deployment.State)}}</span>
   </div>
-  <p class="text-sm text-zinc-500">Parent: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{if .Parent}}{{.Parent}}{{else}}(none — published standalone, unverified){{end}}</code> &middot; Name: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Name}}</code></p>
+  <p class="text-sm text-zinc-500">Parent: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Parent}}</code> &middot; Name: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Name}}</code></p>
+  {{if .AddedCompatibility}}<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Added <code class="bg-amber-100 px-1 rounded">{{.AddedCompatibility}}</code> to this profile's own compatible printers &mdash; it wasn't previously listed there by Bambu.</p>{{end}}
   {{if .Snapshot}}<p class="text-sm text-zinc-500">Backup taken: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Snapshot}}</code></p>{{end}}
   <ol class="relative border-l border-zinc-200 ml-2 space-y-3">
   {{range .Deployment.History}}<li class="ml-4">
@@ -503,14 +576,17 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 	name := r.FormValue("name")
 	parent := r.FormValue("parent")
 	confirmName := r.FormValue("confirm_name")
-	// An empty parent is only valid alongside the explicit "publish
-	// standalone anyway" checkbox on the no-candidates page — anywhere
-	// else, a missing parent is a malformed request, not an intentional
-	// unverified publish (never silently guess or silently flatten).
-	unverified := r.FormValue("confirm_unverified") != ""
-	if name == "" || confirmName == "" || (parent == "" && !unverified) {
-		http.Error(w, "copy: name, parent (or confirm_unverified), and confirm_name are required", http.StatusBadRequest)
+	if name == "" || parent == "" || confirmName == "" {
+		http.Error(w, "copy: name, parent, and confirm_name are required", http.StatusBadRequest)
 		return
+	}
+	// confirm_unverified only appears on the family-fallback page (a parent
+	// that exists but that Bambu's own catalog doesn't yet list as
+	// compatible with printer_canonical) — the checkbox being present and
+	// checked is the user's explicit instruction to add it, never inferred.
+	var addCompatiblePrinter string
+	if r.FormValue("confirm_unverified") != "" {
+		addCompatiblePrinter = r.FormValue("printer_canonical")
 	}
 
 	set, err := resolver.LoadDirs(append([]string{kind.UserDir}, kind.SystemDirs...))
@@ -524,6 +600,23 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 		return
 	}
 
+	// Server-side backstop for the family-fallback flow: printer_canonical
+	// is only ever submitted by that page (never the verified-match/
+	// ambiguous-pick forms), so its presence here means the chosen parent
+	// wasn't confirmed compatible with the target printer up front. The
+	// HTML checkbox being "required" is a client-side nicety only — a raw
+	// POST could skip it, which would otherwise publish onto a parent
+	// that's neither verified compatible nor patched to become compatible.
+	if canonicalTarget := r.FormValue("printer_canonical"); canonicalTarget != "" && addCompatiblePrinter == "" {
+		if parentProfile, ok := set[parent]; ok {
+			compat, cerr := rebind.IsAlreadyCompatible(set, parentProfile, canonicalTarget)
+			if cerr == nil && !compat {
+				http.Error(w, "copy: this parent is not verified compatible with the target printer; confirm_unverified is required", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
 	ctx := r.Context()
 	profile, err := kind.Svc.Repo.Profiles().GetByName(ctx, name)
 	if errors.Is(err, storage.ErrNotFound) {
@@ -534,11 +627,7 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 		return
 	}
 
-	candidates := []string{parent}
-	if unverified {
-		candidates = nil // empty candidate list -> rebind.Rebind flattens (StrategyFlatten), no parent
-	}
-	result, err := kind.Svc.RebindAndPublish(ctx, set, set, leaf, candidates, profile.ID, confirmName,
+	result, err := kind.Svc.RebindAndPublish(ctx, set, set, leaf, []string{parent}, profile.ID, confirmName, addCompatiblePrinter,
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if errors.Is(err, bambuadapter.ErrStudioRunning) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
@@ -560,12 +649,16 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 	}
 
 	data := struct {
-		Kind       string
-		Deployment any
-		Parent     string
-		Name       string
-		Snapshot   string
-	}{Kind: kind.Key, Deployment: result.Deployment, Parent: parent, Name: confirmName, Snapshot: result.Snapshot}
+		Kind               string
+		Deployment         any
+		Parent             string
+		Name               string
+		Snapshot           string
+		AddedCompatibility string
+	}{
+		Kind: kind.Key, Deployment: result.Deployment, Parent: parent, Name: confirmName,
+		Snapshot: result.Snapshot, AddedCompatibility: addCompatiblePrinter,
+	}
 	renderPage(w, copyResultTmpl, data, "Copy result", "Copy result", "", "copy", "")
 }
 
