@@ -149,6 +149,82 @@ func TestCopyFormListsLiveProfiles(t *testing.T) {
 	}
 }
 
+// TestCopyPreviewOffersUnverifiedPublishWhenNoCandidateFound covers the
+// escape hatch for when bambupm genuinely cannot find a safe parent (real
+// case found live: a 0.20mm-layer-height process profile has no compatible
+// parent for a 0.2mm-nozzle printer anywhere in Bambu's own catalog, since
+// that combination doesn't physically exist) — user asked to still be able
+// to publish standalone if they explicitly acknowledge it's unverified,
+// rather than being fully blocked.
+func TestCopyPreviewOffersUnverifiedPublishWhenNoCandidateFound(t *testing.T) {
+	ts, liveDir, _ := newTestServerWithLiveDir(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	// "P1P" isn't present anywhere in this fixture set (confirmed by
+	// TestFindCandidateParentsNoMatchForWrongMaterial), so this is a
+	// genuine zero-candidate case.
+	previewResp, err := http.PostForm(ts.URL+"/copy/preview", map[string][]string{
+		"name":          {"Syscode - AmazonBasics ABS 0.6"},
+		"printer_token": {"P1P"},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/preview: %v", err)
+	}
+	defer previewResp.Body.Close()
+	previewBody, _ := io.ReadAll(previewResp.Body)
+	previewStr := string(previewBody)
+	if !strings.Contains(previewStr, "No matching parent found") {
+		t.Fatalf("preview missing the no-match warning: %s", previewStr)
+	}
+	if !strings.Contains(previewStr, `name="confirm_unverified"`) {
+		t.Fatalf("preview missing the unverified-publish checkbox: %s", previewStr)
+	}
+
+	// Submitting without the checkbox must still be rejected.
+	blockedResp, err := client.PostForm(ts.URL+"/copy/publish", map[string][]string{
+		"name":         {"Syscode - AmazonBasics ABS 0.6"},
+		"parent":       {""},
+		"confirm_name": {"Should Not Publish @P1P"},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/publish (no checkbox): %v", err)
+	}
+	defer blockedResp.Body.Close()
+	if blockedResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("publish without confirm_unverified status = %d, want 400", blockedResp.StatusCode)
+	}
+
+	const newName = "Unverified Copy @P1P"
+	publishResp, err := client.PostForm(ts.URL+"/copy/publish", map[string][]string{
+		"name":               {"Syscode - AmazonBasics ABS 0.6"},
+		"parent":             {""},
+		"confirm_unverified": {"on"},
+		"confirm_name":       {newName},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/publish: %v", err)
+	}
+	defer publishResp.Body.Close()
+	if publishResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /copy/publish status = %d, want 200", publishResp.StatusCode)
+	}
+	publishBody, _ := io.ReadAll(publishResp.Body)
+	if !strings.Contains(string(publishBody), "(none — published standalone, unverified)") {
+		t.Fatalf("publish result did not show the standalone/unverified parent note: %s", publishBody)
+	}
+
+	if _, err := os.Stat(filepath.Join(liveDir, newName+".json")); err != nil {
+		t.Fatalf("published file missing on disk: %v", err)
+	}
+	published, err := os.ReadFile(filepath.Join(liveDir, newName+".json"))
+	if err != nil {
+		t.Fatalf("read published file: %v", err)
+	}
+	if strings.Contains(string(published), `"inherits"`) {
+		t.Fatalf("flattened publish should have no inherits field, got: %s", published)
+	}
+}
+
 func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 	ts, liveDir, _ := newTestServerWithLiveDir(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

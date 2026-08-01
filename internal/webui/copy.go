@@ -296,8 +296,28 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
   </div>
 </section>
 {{else if not .Candidates}}
-<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
-  <p class="text-sm text-zinc-500">No matching parent found under "{{.PrinterToken}}" for this profile's family. Nothing safe to auto-map.</p>
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <div class="flex items-start gap-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-sm">
+    <span>&#9888;</span>
+    <div>
+      <p class="font-medium">No matching parent found under "{{.PrinterToken}}" for this profile's family</p>
+      <p class="text-amber-700/80">Nothing in your library is confirmed compatible with that printer at this profile's tier &mdash; bambupm cannot verify the result will behave the way it does on the printer you built it for. You can still publish it standalone (its settings baked in directly, no inherited parent) if you're confident it's fine.</p>
+    </div>
+  </div>
+  <form method="post" action="{{$publishAction}}" class="space-y-3">
+    <input type="hidden" name="name" value="{{.Name}}">
+    <input type="hidden" name="parent" value="">
+    <label class="flex items-start gap-2 text-sm text-zinc-600">
+      <input type="checkbox" name="confirm_unverified" required class="mt-0.5">
+      I understand this hasn't been verified compatible with "{{.PrinterToken}}" and want to publish it standalone anyway.
+    </label>
+    <label class="block">
+      <span class="text-xs font-medium text-zinc-500 mb-1 block">New profile name</span>
+      <input type="text" name="confirm_name" value="{{.Name}} @{{.PrinterToken}}" required
+        class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+    </label>
+    <button type="submit" class="px-4 py-2 rounded-lg border border-amber-300 bg-amber-100 text-amber-900 text-sm font-medium hover:bg-amber-200 transition">Publish standalone anyway</button>
+  </form>
 </section>
 {{else if gt (len .Candidates) 1}}
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
@@ -439,7 +459,7 @@ var copyResultTmpl = template.Must(template.New("copyResult").Funcs(statusFuncs)
   <div class="flex items-center gap-2">
     <span title="{{.Deployment.State}}" class="text-xs font-medium px-2.5 py-1 rounded-full {{statusClasses (print .Deployment.State)}}">{{statusLabel (print .Deployment.State)}}</span>
   </div>
-  <p class="text-sm text-zinc-500">Parent: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Parent}}</code> &middot; Name: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Name}}</code></p>
+  <p class="text-sm text-zinc-500">Parent: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{if .Parent}}{{.Parent}}{{else}}(none — published standalone, unverified){{end}}</code> &middot; Name: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Name}}</code></p>
   {{if .Snapshot}}<p class="text-sm text-zinc-500">Backup taken: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Snapshot}}</code></p>{{end}}
   <ol class="relative border-l border-zinc-200 ml-2 space-y-3">
   {{range .Deployment.History}}<li class="ml-4">
@@ -483,8 +503,13 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 	name := r.FormValue("name")
 	parent := r.FormValue("parent")
 	confirmName := r.FormValue("confirm_name")
-	if name == "" || parent == "" || confirmName == "" {
-		http.Error(w, "copy: name, parent, and confirm_name are required", http.StatusBadRequest)
+	// An empty parent is only valid alongside the explicit "publish
+	// standalone anyway" checkbox on the no-candidates page — anywhere
+	// else, a missing parent is a malformed request, not an intentional
+	// unverified publish (never silently guess or silently flatten).
+	unverified := r.FormValue("confirm_unverified") != ""
+	if name == "" || confirmName == "" || (parent == "" && !unverified) {
+		http.Error(w, "copy: name, parent (or confirm_unverified), and confirm_name are required", http.StatusBadRequest)
 		return
 	}
 
@@ -509,7 +534,11 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 		return
 	}
 
-	result, err := kind.Svc.RebindAndPublish(ctx, set, set, leaf, []string{parent}, profile.ID, confirmName,
+	candidates := []string{parent}
+	if unverified {
+		candidates = nil // empty candidate list -> rebind.Rebind flattens (StrategyFlatten), no parent
+	}
+	result, err := kind.Svc.RebindAndPublish(ctx, set, set, leaf, candidates, profile.ID, confirmName,
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if errors.Is(err, bambuadapter.ErrStudioRunning) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
