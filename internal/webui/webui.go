@@ -34,7 +34,7 @@ func statusLabel(state string) string {
 	case "ROUND_TRIP_VERIFIED", "ACTIVE":
 		return "VERIFIED"
 	case "INSTALLED_LOCALLY":
-		return "AWAITING SAVE IN STUDIO"
+		return "AWAITING EXPLICIT MANUAL SAVE IN STUDIO"
 	case "DRAFT", "VALIDATED", "STAGED", "OBSERVED_BY_STUDIO", "SYNC_OBSERVED":
 		return "IN PROGRESS"
 	default:
@@ -133,11 +133,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /copy/preview", s.handleCopyPreview)
 	mux.HandleFunc("POST /copy/publish", s.handleCopyPublish)
 	mux.HandleFunc("GET /deployments/{id}", s.handleDeploymentDetail)
+	mux.HandleFunc("GET /api/deployment-status/{id}", s.handleDeploymentStatusFragment)
 	mux.HandleFunc("POST /deployments/{id}/check", s.handleCheckRecognition)
 	mux.HandleFunc("GET /copy/process", s.handleCopyFormProcess)
 	mux.HandleFunc("POST /copy/process/preview", s.handleCopyPreviewProcess)
 	mux.HandleFunc("POST /copy/process/publish", s.handleCopyPublishProcess)
 	mux.HandleFunc("GET /deployments/process/{id}", s.handleDeploymentDetailProcess)
+	mux.HandleFunc("GET /api/deployment-status/process/{id}", s.handleDeploymentStatusFragmentProcess)
 	mux.HandleFunc("POST /deployments/process/{id}/check", s.handleCheckRecognitionProcess)
 	mux.HandleFunc("GET /backups", s.handleBackupsList)
 	mux.HandleFunc("POST /backups/{name}/restore", s.handleBackupRestore)

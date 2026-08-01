@@ -315,7 +315,7 @@ func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 		t.Fatalf("POST /copy/publish status = %d, want 200", publishResp.StatusCode)
 	}
 	publishBody, _ := io.ReadAll(publishResp.Body)
-	if !strings.Contains(string(publishBody), `title="INSTALLED_LOCALLY"`) || !strings.Contains(string(publishBody), ">AWAITING SAVE IN STUDIO<") {
+	if !strings.Contains(string(publishBody), `title="INSTALLED_LOCALLY"`) || !strings.Contains(string(publishBody), ">AWAITING EXPLICIT MANUAL SAVE IN STUDIO<") {
 		t.Fatalf("publish result's final state is not INSTALLED_LOCALLY (no .info exists yet for a brand-new profile, so recognition can't have happened): %s", publishBody)
 	}
 	if !strings.Contains(string(publishBody), "Backup taken") {
@@ -427,6 +427,89 @@ func TestBackgroundPollerDetectsRecognitionWithoutManualCheck(t *testing.T) {
 	}
 }
 
+// TestDeploymentDetailPollsStatusFragmentClientSide covers the real
+// complaint found live: the backend already rechecks INSTALLED_LOCALLY
+// deployments every few seconds (TestBackgroundPollerDetectsRecognitionWithoutManualCheck),
+// but the already-open deployment page was static HTML from page load, so a
+// user watching it saw nothing change without a manual reload/click. The
+// page must embed a poll script pointed at /api/deployment-status/{id}, and
+// that endpoint must independently reflect the current state.
+func TestDeploymentDetailPollsStatusFragmentClientSide(t *testing.T) {
+	ts, liveDir, _ := newTestServerWithLiveDir(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	const newName = "Fragment Poll Test @P1S"
+	publishResp, err := client.PostForm(ts.URL+"/copy/publish", map[string][]string{
+		"name":         {"Syscode - AmazonBasics ABS 0.6"},
+		"parent":       {"Bambu ABS @BBL P1S 0.4 nozzle"},
+		"confirm_name": {newName},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/publish: %v", err)
+	}
+	defer publishResp.Body.Close()
+	publishBody, _ := io.ReadAll(publishResp.Body)
+	idx := strings.Index(string(publishBody), "/deployments/")
+	if idx == -1 {
+		t.Fatalf("publish result missing a deployment link: %s", publishBody)
+	}
+	rest := string(publishBody)[idx+len("/deployments/"):]
+	deploymentID := rest[:strings.IndexAny(rest, "\"'")]
+
+	detailResp, err := http.Get(ts.URL + "/deployments/" + deploymentID)
+	if err != nil {
+		t.Fatalf("GET /deployments/%s: %v", deploymentID, err)
+	}
+	defer detailResp.Body.Close()
+	detailBody, _ := io.ReadAll(detailResp.Body)
+	detailStr := string(detailBody)
+	if !strings.Contains(detailStr, `id="deployment-status"`) {
+		t.Fatalf("deployment detail missing the pollable status div: %s", detailStr)
+	}
+	// html/template's JS-context escaper legally escapes "/" as "\/" inside
+	// the <script> block's string literal, so check the unescaped form.
+	if !strings.Contains(strings.ReplaceAll(detailStr, `\/`, "/"), "/api/deployment-status/"+deploymentID) {
+		t.Fatalf("deployment detail missing the poll script's fetch target: %s", detailStr)
+	}
+	if !strings.Contains(detailStr, "setInterval") {
+		t.Fatalf("deployment detail missing the poll script itself: %s", detailStr)
+	}
+
+	fragResp, err := http.Get(ts.URL + "/api/deployment-status/" + deploymentID)
+	if err != nil {
+		t.Fatalf("GET /api/deployment-status/%s: %v", deploymentID, err)
+	}
+	defer fragResp.Body.Close()
+	fragBody, _ := io.ReadAll(fragResp.Body)
+	fragStr := string(fragBody)
+	if !strings.Contains(fragStr, `title="INSTALLED_LOCALLY"`) {
+		t.Fatalf("status fragment missing the current state badge: %s", fragStr)
+	}
+	if strings.Contains(fragStr, "<html") || strings.Contains(fragStr, "<body") {
+		t.Fatalf("status fragment should be a bare fragment, not a full page: %s", fragStr)
+	}
+
+	// Simulate Studio saving, then confirm the SAME fragment endpoint (no
+	// page reload) reflects the new state once checked.
+	infoPath := filepath.Join(liveDir, newName+".info")
+	if err := os.WriteFile(infoPath, []byte("updated_time = 12345\nsetting_id = PFUStest\n"), 0o644); err != nil {
+		t.Fatalf("write .info: %v", err)
+	}
+	if _, err := client.Post(ts.URL+"/deployments/"+deploymentID+"/check", "application/x-www-form-urlencoded", nil); err != nil {
+		t.Fatalf("POST /deployments/%s/check: %v", deploymentID, err)
+	}
+
+	fragResp2, err := http.Get(ts.URL + "/api/deployment-status/" + deploymentID)
+	if err != nil {
+		t.Fatalf("GET /api/deployment-status/%s (after check): %v", deploymentID, err)
+	}
+	defer fragResp2.Body.Close()
+	fragBody2, _ := io.ReadAll(fragResp2.Body)
+	if !strings.Contains(string(fragBody2), `title="ACTIVE"`) {
+		t.Fatalf("status fragment did not reflect ACTIVE after recognition: %s", fragBody2)
+	}
+}
+
 // TestCopyProcessAlreadyCompatibleNeedsNoCopy covers the real-world common
 // case for process profiles: the user's leaf inherits from "0.20mm Standard
 // @BBL X1C", whose compatible_printers already includes P1S (confirmed
@@ -493,7 +576,7 @@ func TestCopyProcessPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 		t.Fatalf("POST /copy/process/publish status = %d, want 200", publishResp.StatusCode)
 	}
 	publishBody, _ := io.ReadAll(publishResp.Body)
-	if !strings.Contains(string(publishBody), ">AWAITING SAVE IN STUDIO<") {
+	if !strings.Contains(string(publishBody), ">AWAITING EXPLICIT MANUAL SAVE IN STUDIO<") {
 		t.Fatalf("publish result's final state is not INSTALLED_LOCALLY: %s", publishBody)
 	}
 
@@ -530,6 +613,67 @@ func TestCopyProcessPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 	finalBody, _ := io.ReadAll(finalResp.Body)
 	if !strings.Contains(string(finalBody), ">VERIFIED<") {
 		t.Fatalf("process deployment did not reach ACTIVE after check-recognition: %s", finalBody)
+	}
+}
+
+// TestCopyProcessPreviewSuggestsClosestCandidateWhenAmbiguous covers the
+// heuristic added live: FindCandidateParentsByCompatiblePrinters can return
+// several equally "compatible" base profiles (e.g. real "Standard" vs
+// "High Quality" system leaves under the same nozzle), leaving the user to
+// guess which one the source profile was actually built on. bambupm now
+// picks the one requiring the fewest setting changes and marks it
+// "Suggested", first in the list.
+func TestCopyProcessPreviewSuggestsClosestCandidateWhenAmbiguous(t *testing.T) {
+	ts, _, processDir, _ := newTestServerWithProcessDir(t)
+
+	// A second same-family, same-target-printer candidate that diverges
+	// from the leaf ("Syscode - 0.20mm Standard @BBL X1C", wall_loops=4,
+	// sparse_infill_density=25%) in far more fields than the real
+	// "0.20mm Standard @BBL A1" candidate does (which only differs in
+	// wall_loops=2) — a worse match that must rank second.
+	decoy := `{
+		"type": "process",
+		"name": "0.20mm Odd @BBL A1",
+		"inherits": "fdm_process_single_0.20",
+		"from": "system",
+		"setting_id": "GP999",
+		"instantiation": "true",
+		"wall_loops": "9",
+		"sparse_infill_density": "80%",
+		"top_shell_layers": "7",
+		"bottom_shell_layers": "6",
+		"line_width": "0.6",
+		"compatible_printers": ["Bambu Lab A1 0.4 nozzle"]
+	}`
+	if err := os.WriteFile(filepath.Join(processDir, "0.20mm Odd @BBL A1.json"), []byte(decoy), 0o644); err != nil {
+		t.Fatalf("write decoy candidate: %v", err)
+	}
+
+	previewResp, err := http.PostForm(ts.URL+"/copy/process/preview", map[string][]string{
+		"name":          {"Syscode - 0.20mm Standard @BBL X1C"},
+		"printer_token": {"A1 0.4|Bambu Lab A1 0.4 nozzle"},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/process/preview: %v", err)
+	}
+	defer previewResp.Body.Close()
+	previewBody, _ := io.ReadAll(previewResp.Body)
+	previewStr := string(previewBody)
+
+	if !strings.Contains(previewStr, "Suggested") {
+		t.Fatalf("preview missing the Suggested badge: %s", previewStr)
+	}
+	goodIdx := strings.Index(previewStr, "0.20mm Standard @BBL A1")
+	badIdx := strings.Index(previewStr, "0.20mm Odd @BBL A1")
+	if goodIdx == -1 || badIdx == -1 {
+		t.Fatalf("preview missing one of the two candidates: %s", previewStr)
+	}
+	if goodIdx > badIdx {
+		t.Fatalf("closer candidate (0.20mm Standard @BBL A1) should be listed first, ahead of the worse match: %s", previewStr)
+	}
+	suggestedIdx := strings.Index(previewStr, "Suggested")
+	if suggestedIdx < goodIdx || suggestedIdx > badIdx {
+		t.Fatalf("Suggested badge should be attached to the closer candidate's card: %s", previewStr)
 	}
 }
 
@@ -793,6 +937,12 @@ func TestStudioRunningWarningShownAndPublishBlocked(t *testing.T) {
 	publishBody, _ := io.ReadAll(publishResp.Body)
 	if !strings.Contains(string(publishBody), "Bambu Studio is running") {
 		t.Fatalf("blocked-publish page missing the clear callout: %s", publishBody)
+	}
+	// Real bug found live: the blocked page's own content already explains
+	// Studio is running, but it also had the live-poll banner slot
+	// (id="studio-warning") turned on, showing the same message twice.
+	if strings.Contains(string(publishBody), `id="studio-warning"`) {
+		t.Fatalf("blocked-publish page shows a duplicate live-poll warning on top of its own content: %s", publishBody)
 	}
 
 	if _, err := os.Stat(filepath.Join(liveDir, "Blocked @P1S.json")); err == nil {

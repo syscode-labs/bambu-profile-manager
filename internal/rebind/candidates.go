@@ -51,6 +51,35 @@ func FindCandidateParents(sourceSet, targetSet resolver.Set, leaf *domain.RawPro
 	return candidates, nil
 }
 
+// processVariantSuffix strips a process root's per-diameter/layer-height
+// variant (e.g. "fdm_process_single_0.20" or
+// "fdm_process_single_0.10_nozzle_0.2") down to its "single"/"dual" family
+// ("fdm_process_single") — real bug found live: RootAncestorName's
+// granularity is correct for filament, where each material sits exactly one
+// hop below "fdm_process_common"-shaped commons (fdm_filament_pla is the
+// root, full stop). Process profiles have an *extra* hop the same generic
+// walk can't see — every nozzle diameter/layer-height combo gets its own
+// root node (fdm_process_single_0.20, fdm_process_single_0.10_nozzle_0.2,
+// ...) that all in turn inherit "fdm_process_single_common". Comparing
+// RootAncestorName's result directly meant copying a process profile to a
+// different nozzle diameter (the very case this feature exists for) could
+// never find its real, compatible-printers-verified parent — it always fell
+// through to the broad, unfiltered same-family fallback instead, which is
+// how a same-family-but-wrong-material profile (e.g. a TPU leaf) could get
+// picked instead of the correct standard one. Confirmed against the real
+// system catalog: every process root name is "fdm_process_single_..." or
+// "fdm_process_dual_...", so stripping the trailing variant leaves exactly
+// those two families — filament root names never match the prefix, so this
+// is a no-op for them (falls back to plain equality).
+var processVariantSuffix = regexp.MustCompile(`^(fdm_process_(?:single|dual))_.+$`)
+
+func processRootFamily(rootName string) string {
+	if m := processVariantSuffix.FindStringSubmatch(rootName); m != nil {
+		return m[1]
+	}
+	return rootName
+}
+
 // FindCandidateParentsByCompatiblePrinters searches targetSet for profiles
 // under the same family root as leaf (see resolver.RootAncestorName) whose
 // *resolved* compatible_printers field lists targetPrinterName exactly.
@@ -71,6 +100,7 @@ func FindCandidateParentsByCompatiblePrinters(sourceSet, targetSet resolver.Set,
 	if err != nil {
 		return nil, fmt.Errorf("rebind: find candidates by compatible printers: source root ancestor: %w", err)
 	}
+	rootFamily := processRootFamily(rootName)
 
 	var candidates []string
 	for name, p := range targetSet {
@@ -78,7 +108,7 @@ func FindCandidateParentsByCompatiblePrinters(sourceSet, targetSet resolver.Set,
 			continue
 		}
 		candidateRoot, err := resolver.RootAncestorName(targetSet, p)
-		if err != nil || candidateRoot != rootName {
+		if err != nil || processRootFamily(candidateRoot) != rootFamily {
 			continue // broken chain, or a different family — not a usable candidate
 		}
 		effective, _, err := resolver.Resolve(targetSet, p)

@@ -178,16 +178,16 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
   {{end}}
 <form method="post" action="{{if eq .Kind "process"}}/copy/process/preview{{else}}/copy/preview{{end}}" class="space-y-4">
   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-    <label class="block">
+    <label class="block min-w-0">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">Profile</span>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 min-w-0">
         <div id="filament-preview-wrap" class="relative shrink-0">
           <button type="button" id="filament-preview-btn"
             class="w-8 h-8 rounded-lg border border-zinc-300 text-zinc-400 hover:text-zinc-700 hover:border-zinc-400 text-xs flex items-center justify-center"
             aria-label="Preview profile properties">&#9432;</button>
           <div id="filament-preview-popup" class="hidden absolute left-0 top-8 pt-2 z-20 w-96 max-h-[32rem] overflow-y-auto bg-white border border-zinc-200 rounded-xl shadow-lg p-4 text-xs"></div>
         </div>
-        <select id="copy-profile-select" name="name" required class="flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+        <select id="copy-profile-select" name="name" required class="flex-1 min-w-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
         {{range .Names}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </div>
@@ -344,12 +344,12 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
     Pick a parent
   </div>
   <p class="text-sm text-zinc-500">In Bambu Studio, every profile inherits its settings from a base "parent" profile &mdash; that's how "@P1S" or "@X1C" variants share most of their settings. {{len .Candidates}} base profiles match both this profile's family and "{{.PrinterToken}}", so this tool won't guess which one your copy should inherit from. Add more of the printer name (e.g. the nozzle size) on the previous step to narrow it to one, or just pick the correct base profile below.</p>
-  {{$name := .Name}}{{$token := .PrinterToken}}
+  {{$name := .Name}}{{$token := .PrinterToken}}{{$suggested := .SuggestedParent}}
   {{range .Candidates}}
-  <form method="post" action="{{$publishAction}}" class="border border-zinc-200 rounded-xl p-4 space-y-3">
+  <form method="post" action="{{$publishAction}}" class="rounded-xl p-4 space-y-3 {{if and $suggested (eq . $suggested)}}border-2 border-emerald-300 bg-emerald-50/50{{else}}border border-zinc-200{{end}}">
     <input type="hidden" name="name" value="{{$name}}">
     <input type="hidden" name="parent" value="{{.}}">
-    <p class="text-sm font-medium">{{.}}</p>
+    <p class="text-sm font-medium">{{.}}{{if and $suggested (eq . $suggested)}} <span class="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-600 text-white align-middle">Suggested &mdash; closest match</span>{{end}}</p>
     <label class="block">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">New profile name</span>
       <input type="text" name="confirm_name" value="{{$name}} @{{$token}}" required
@@ -437,6 +437,64 @@ func diffValueOrNotSet(key string, v any) string {
 // current effective fields — so the "not verified compatible, pick anyway"
 // UI can show a real diff instead of a bare name list (user asked to see
 // this rather than just publish unverified/standalone).
+// unresolvedDiffCount sorts a candidate whose diff couldn't be computed to
+// the very end, rather than treating an error as "0 differences" (best).
+const unresolvedDiffCount = 1 << 30
+
+// rankCandidatesByCloseness orders candidates so the one closest to leaf's
+// own effective settings comes first, and returns that top pick as the
+// suggested one (empty if candidates is empty). "Closest" is two signals,
+// applied in order: (1) same resolved layer_height as leaf — real gap found
+// live: FindCandidateParentsByCompatiblePrinters can return every
+// layer-height variant for a nozzle as equally "compatible", but a profile
+// built at 0.10mm should rebind onto a 0.10mm base, not 0.06mm or 0.14mm;
+// (2) within that, fewest fields rebind.Rebind would actually change — e.g.
+// a nozzle's "Standard" and "High Quality" bases share the same layer
+// height but differ in speed/quality tuning throughout, and the fewer
+// changes a base requires, the more it resembles what leaf was built on.
+func rankCandidatesByCloseness(set resolver.Set, leaf *domain.RawProfile, candidates []string) (string, []string) {
+	var sourceLH any
+	if sourceEff, _, err := resolver.Resolve(set, leaf); err == nil {
+		sourceLH = sourceEff.Fields["layer_height"]
+	}
+
+	type scored struct {
+		name            string
+		sameLayerHeight bool
+		diffCount       int
+	}
+	scores := make([]scored, len(candidates))
+	for i, name := range candidates {
+		sc := scored{name: name, diffCount: unresolvedDiffCount}
+		if p, ok := set[name]; ok {
+			if eff, _, err := resolver.Resolve(set, p); err == nil && sourceLH != nil {
+				if lh, ok := eff.Fields["layer_height"]; ok && lh == sourceLH {
+					sc.sameLayerHeight = true
+				}
+			}
+			if rb, err := rebind.Rebind(set, set, leaf, []string{name}); err == nil {
+				sc.diffCount = len(rb.Diff)
+			}
+		}
+		scores[i] = sc
+	}
+	sort.SliceStable(scores, func(i, j int) bool {
+		if scores[i].sameLayerHeight != scores[j].sameLayerHeight {
+			return scores[i].sameLayerHeight
+		}
+		return scores[i].diffCount < scores[j].diffCount
+	})
+
+	ranked := make([]string, len(scores))
+	for i, s := range scores {
+		ranked[i] = s.name
+	}
+	if len(ranked) == 0 {
+		return "", ranked
+	}
+	return ranked[0], ranked
+}
+
 func familyCandidatesWithDiff(sourceSet, targetSet resolver.Set, leaf *domain.RawProfile, names []string) []familyCandidate {
 	out := make([]familyCandidate, 0, len(names))
 	for _, name := range names {
@@ -511,6 +569,11 @@ func (s *Server) renderCopyPreview(w http.ResponseWriter, r *http.Request, kind 
 		familyCandidates = familyCandidatesWithDiff(set, set, leaf, names)
 	}
 
+	var suggestedParent string
+	if len(candidates) > 1 {
+		suggestedParent, candidates = rankCandidatesByCloseness(set, leaf, candidates)
+	}
+
 	data := struct {
 		Kind              string
 		Name              string
@@ -518,10 +581,11 @@ func (s *Server) renderCopyPreview(w http.ResponseWriter, r *http.Request, kind 
 		PrinterCanonical  string
 		AlreadyCompatible bool
 		Candidates        []string
+		SuggestedParent   string
 		FamilyCandidates  []familyCandidate
 	}{
 		Kind: kind.Key, Name: name, PrinterToken: token, PrinterCanonical: canonical,
-		AlreadyCompatible: alreadyCompatible, Candidates: candidates, FamilyCandidates: familyCandidates,
+		AlreadyCompatible: alreadyCompatible, Candidates: candidates, SuggestedParent: suggestedParent, FamilyCandidates: familyCandidates,
 	}
 	renderPage(w, copyPreviewTmpl, data, "Copy preview", "Copy preview: "+name, "&rarr; "+token, "copy", studioWarning(kind.Svc), true)
 }
@@ -650,7 +714,7 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 			Title, HeaderTitle, HeaderSubtitle, Active string
 			Warning, Content                           template.HTML
 			WatchStudio                                bool
-		}{Title: "Publish blocked", HeaderTitle: "Publish blocked", Active: "copy", Content: template.HTML(contentBuf.String()), WatchStudio: true}
+		}{Title: "Publish blocked", HeaderTitle: "Publish blocked", Active: "copy", Content: template.HTML(contentBuf.String()), WatchStudio: false}
 		var buf bytes.Buffer
 		shellTmpl.Execute(&buf, shellData)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -676,10 +740,13 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 	renderPage(w, copyResultTmpl, data, "Copy result", "Copy result", "", "copy", "", false)
 }
 
-var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Funcs(statusFuncs).Parse(`
-<p class="text-sm text-zinc-500">A deployment only shows <strong>VERIFIED</strong> once Bambu Studio, on this machine, has actually
-  opened and saved the profile and its settings still match &mdash; not just because bambupm wrote the file to disk. This is a local check
-  (it reads the profile's own metadata file); it has nothing to do with Bambu's cloud account sync.</p>
+// deploymentStatusTmpl is the pollable part of the deployment page: the
+// status badge, timeline, and (while INSTALLED_LOCALLY) the "reopen Studio
+// and Save" note. Rendered both as the fragment /api/deployment-status
+// returns for polling, and embedded once inside deploymentDetailTmpl for
+// the full page — same content, same template, so a poll's refreshed
+// markup is byte-identical to what a page reload would show.
+var deploymentStatusTmpl = template.Must(template.New("deploymentStatus").Funcs(statusFuncs).Parse(`
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
   <div class="flex items-center justify-between">
     <span title="{{.Deployment.State}}" class="text-xs font-medium px-2.5 py-1 rounded-full {{statusClasses (print .Deployment.State)}}">{{statusLabel (print .Deployment.State)}}</span>
@@ -702,15 +769,42 @@ var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Funcs(
     <p class="text-sm text-zinc-500">
       Everything after that is automatic: bambupm checks this deployment every few seconds in the background and
       will flip it to <code class="bg-zinc-100 px-1 rounded">ACTIVE</code> (or flag a mismatch) the moment it
-      notices &mdash; just come back and refresh this page, no button to press.
+      notices &mdash; this page updates itself, no refresh needed.
     </p>
   </div>
   {{end}}
 </section>
 `))
 
+// deploymentDetailTmpl embeds deploymentStatusTmpl (associated into the same
+// template set below via New on the same *Template) inside a polled div,
+// plus the client-side poll script — mirroring shell.go's studio-status
+// live-poll pattern (real gap found live: the backend poller already
+// rechecks INSTALLED_LOCALLY deployments every few seconds, but this page
+// was static HTML from page load, so a user watching it saw nothing change
+// until they manually reloaded or clicked into the deployment again).
+var deploymentDetailTmpl = template.Must(deploymentStatusTmpl.New("deploymentDetail").Parse(`
+<p class="text-sm text-zinc-500">A deployment only shows <strong>VERIFIED</strong> once Bambu Studio, on this machine, has actually
+  opened and saved the profile and its settings still match &mdash; not just because bambupm wrote the file to disk. This is a local check
+  (it reads the profile's own metadata file); it has nothing to do with Bambu's cloud account sync.</p>
+<div id="deployment-status">{{template "deploymentStatus" .}}</div>
+<script>
+(function() {
+  var el = document.getElementById('deployment-status');
+  if (!el) return;
+  function poll() {
+    fetch("{{.StatusURL}}")
+      .then(function(r) { return r.ok ? r.text() : Promise.reject(r.status); })
+      .then(function(html) { el.innerHTML = html; })
+      .catch(function() {});
+  }
+  setInterval(poll, 5000);
+})();
+</script>
+`))
+
 func (s *Server) handleDeploymentDetail(w http.ResponseWriter, r *http.Request) {
-	s.renderDeploymentDetail(w, r, s.filamentKind())
+	s.renderDeploymentDetail(w, r, s.filamentKind(), "/api/deployment-status/")
 }
 
 func (s *Server) handleDeploymentDetailProcess(w http.ResponseWriter, r *http.Request) {
@@ -719,18 +813,51 @@ func (s *Server) handleDeploymentDetailProcess(w http.ResponseWriter, r *http.Re
 		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
 		return
 	}
-	s.renderDeploymentDetail(w, r, kind)
+	s.renderDeploymentDetail(w, r, kind, "/api/deployment-status/process/")
 }
 
-func (s *Server) renderDeploymentDetail(w http.ResponseWriter, r *http.Request, kind profileKind) {
+func (s *Server) renderDeploymentDetail(w http.ResponseWriter, r *http.Request, kind profileKind, statusURLPrefix string) {
 	id := r.PathValue("id")
 	dep, err := kind.Svc.Repo.Deployments().Get(r.Context(), id)
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	data := struct{ Deployment any }{Deployment: dep}
+	data := struct {
+		Deployment any
+		StatusURL  string
+	}{Deployment: dep, StatusURL: statusURLPrefix + id}
 	renderPage(w, deploymentDetailTmpl, data, "Deployment", "Deployment "+id, "", "", "", false)
+}
+
+func (s *Server) handleDeploymentStatusFragment(w http.ResponseWriter, r *http.Request) {
+	s.renderDeploymentStatusFragment(w, r, s.filamentKind())
+}
+
+func (s *Server) handleDeploymentStatusFragmentProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderDeploymentStatusFragment(w, r, kind)
+}
+
+// renderDeploymentStatusFragment re-reads the deployment and returns just
+// deploymentStatusTmpl's markup — polled client-side (see
+// deploymentDetailTmpl's script) so the badge/timeline reflect the
+// background poller's work without a page reload.
+func (s *Server) renderDeploymentStatusFragment(w http.ResponseWriter, r *http.Request, kind profileKind) {
+	id := r.PathValue("id")
+	dep, err := kind.Svc.Repo.Deployments().Get(r.Context(), id)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := deploymentStatusTmpl.Execute(w, struct{ Deployment any }{Deployment: dep}); err != nil {
+		http.Error(w, "render: "+err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // recheckDeployment re-derives a deployment's published path/target profile
@@ -771,7 +898,16 @@ func recheckDeployment(ctx context.Context, kind profileKind, id string) error {
 		return err
 	}
 
-	_, err = kind.Svc.CheckRecognition(ctx, id, targetProfile, publishedPath, reconcile.InfoFields{}, afterInfo)
+	// Loaded so CheckRecognition can resolve targetProfile's (and the
+	// observed file's) full inherits chain before hashing — real bug found
+	// live: without this, a harmless Bambu Studio dedup-on-save (dropping a
+	// leaf field that's now redundant with a rebound parent) read as a
+	// SEMANTIC_MISMATCH even though nothing about the effective settings
+	// changed. Best-effort: a load failure just falls back to today's
+	// raw-fields comparison rather than blocking the recheck entirely.
+	set, _ := resolver.LoadDirs(append([]string{kind.UserDir}, kind.SystemDirs...))
+
+	_, err = kind.Svc.CheckRecognition(ctx, id, targetProfile, publishedPath, set, reconcile.InfoFields{}, afterInfo)
 	return err
 }
 

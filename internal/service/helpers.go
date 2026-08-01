@@ -27,7 +27,8 @@ func TargetProfileFromVersion(resolvedJSON []byte) (*domain.RawProfile, error) {
 	if name == "" {
 		return nil, fmt.Errorf("service: stored version has no name field")
 	}
-	return &domain.RawProfile{Name: name, Fields: fields}, nil
+	inherits, _ := fields["inherits"].(string)
+	return &domain.RawProfile{Name: name, Inherits: inherits, Fields: fields}, nil
 }
 
 func jsonMarshal(fields map[string]any) ([]byte, error) {

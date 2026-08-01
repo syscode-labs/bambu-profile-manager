@@ -215,7 +215,7 @@ func (s *Service) RebindAndPublish(
 		}
 	}
 
-	return s.publishFlow(ctx, dep, result, rb.TargetProfile, beforeInfo, afterInfo)
+	return s.publishFlow(ctx, dep, result, rb.TargetProfile, targetSet, beforeInfo, afterInfo)
 }
 
 func cloneWithName(fields map[string]any, name string) map[string]any {
@@ -302,7 +302,11 @@ func (s *Service) Rollback(ctx context.Context, profileID string, beforeInfo, af
 	dep := reconcile.New(id, profileID, newRevision)
 	result := &PublishResult{Deployment: dep}
 
-	return s.publishFlow(ctx, dep, result, targetProfile, beforeInfo, afterInfo)
+	// targetProfile here never sets Inherits (unlike RebindAndPublish's),
+	// so effectiveFieldsForHash would no-op on it regardless — nil preserves
+	// today's raw-fields comparison rather than silently changing Rollback's
+	// behavior as a side effect of this fix.
+	return s.publishFlow(ctx, dep, result, targetProfile, nil, beforeInfo, afterInfo)
 }
 
 // publishFlow is the shared tail of RebindAndPublish and Rollback: validate
@@ -318,6 +322,7 @@ func (s *Service) publishFlow(
 	dep *reconcile.Deployment,
 	result *PublishResult,
 	targetProfile *domain.RawProfile,
+	set resolver.Set,
 	beforeInfo, afterInfo reconcile.InfoFields,
 ) (*PublishResult, error) {
 	result.TargetProfile = targetProfile
@@ -397,7 +402,7 @@ func (s *Service) publishFlow(
 		return result, fmt.Errorf("service: record version: %w", err)
 	}
 
-	return s.checkRecognitionAndVerify(ctx, dep, result, targetProfile, published, beforeInfo, afterInfo)
+	return s.checkRecognitionAndVerify(ctx, dep, result, targetProfile, published, set, beforeInfo, afterInfo)
 }
 
 // CheckRecognition resumes a Deployment that's sitting at INSTALLED_LOCALLY
@@ -411,6 +416,7 @@ func (s *Service) CheckRecognition(
 	deploymentID string,
 	targetProfile *domain.RawProfile,
 	publishedPath string,
+	set resolver.Set,
 	beforeInfo, afterInfo reconcile.InfoFields,
 ) (*PublishResult, error) {
 	dep, err := s.Repo.Deployments().Get(ctx, deploymentID)
@@ -421,7 +427,33 @@ func (s *Service) CheckRecognition(
 		return nil, fmt.Errorf("service: check recognition: deployment %s is in state %s, want INSTALLED_LOCALLY", deploymentID, dep.State)
 	}
 	result := &PublishResult{Deployment: &dep, TargetProfile: targetProfile, PublishedPath: publishedPath}
-	return s.checkRecognitionAndVerify(ctx, &dep, result, targetProfile, publishedPath, beforeInfo, afterInfo)
+	return s.checkRecognitionAndVerify(ctx, &dep, result, targetProfile, publishedPath, set, beforeInfo, afterInfo)
+}
+
+// effectiveFieldsForHash resolves p's full inheritance chain in set and
+// returns its effective fields, falling back to p's own raw fields when
+// there's no chain to walk (p.Inherits == "", e.g. a flattened/standalone
+// profile) or set is nil (callers without a loaded catalog, e.g. the CLI's
+// check-recognition command, which has no --system-dir today). Real bug
+// found live: hashing raw own-fields instead of resolved ones meant a
+// harmless Bambu Studio save could flip a deployment to SEMANTIC_MISMATCH —
+// Studio deduplicates a leaf's own fields against its (possibly new, after
+// a cross-diameter rebind) parent on save, dropping any that are now
+// redundant (e.g. layer_height already defined by the new parent). The
+// *effective* settings are unchanged; only which profile in the chain
+// states them moved. Comparing resolved fields on both sides ignores that,
+// same as normalize.Canonical already ignores volatile metadata for the
+// same reason — this is the settings-identity check that "semantic hash"
+// was always supposed to be.
+func effectiveFieldsForHash(set resolver.Set, p *domain.RawProfile) map[string]any {
+	if set == nil || p.Inherits == "" {
+		return p.Fields
+	}
+	eff, _, err := resolver.Resolve(set, p)
+	if err != nil {
+		return p.Fields // parent not in this set (shouldn't happen) — fall back rather than fail verification outright
+	}
+	return eff.Fields
 }
 
 // checkRecognitionAndVerify is the Detector-onward tail shared by
@@ -433,6 +465,7 @@ func (s *Service) checkRecognitionAndVerify(
 	result *PublishResult,
 	targetProfile *domain.RawProfile,
 	published string,
+	set resolver.Set,
 	beforeInfo, afterInfo reconcile.InfoFields,
 ) (*PublishResult, error) {
 	defer func() {
@@ -459,11 +492,13 @@ func (s *Service) checkRecognitionAndVerify(
 		return result, err
 	}
 
-	expectedHash, err := hashOf(targetProfile.Fields)
+	expectedHash, err := hashOf(effectiveFieldsForHash(set, targetProfile))
 	if err != nil {
 		return result, err
 	}
-	verification, err := bambuadapter.Verify(obs.Fields, expectedHash)
+	obsInherits, _ := obs.Fields["inherits"].(string)
+	obsProfile := &domain.RawProfile{Name: targetProfile.Name, Inherits: obsInherits, Fields: obs.Fields}
+	verification, err := bambuadapter.Verify(effectiveFieldsForHash(set, obsProfile), expectedHash)
 	if err != nil {
 		return result, fmt.Errorf("service: verify: %w", err)
 	}

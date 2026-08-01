@@ -81,11 +81,22 @@ func processFixtureSet(t *testing.T) resolver.Set {
 		"name": "0.20mm Standard @BBL A1", "inherits": "fdm_process_single_0.20", "from": "system",
 		"compatible_printers": []any{"Bambu Lab A1 0.4 nozzle"},
 	}}
+	// A different nozzle diameter gets its own root node in the real catalog
+	// (fdm_process_single_0.10_nozzle_0.2, sibling of fdm_process_single_0.20,
+	// both under fdm_process_single_common) — mirrors the real bug: a naive
+	// exact-root-name match would treat this as a different family and never
+	// offer it as a candidate for a same-family, different-diameter copy.
+	nozzle02 := &domain.RawProfile{Name: "fdm_process_single_0.10_nozzle_0.2", Inherits: "fdm_process_single_common",
+		Fields: map[string]any{"name": "fdm_process_single_0.10_nozzle_0.2", "inherits": "fdm_process_single_common"}}
+	x1c02 := &domain.RawProfile{Name: "0.10mm Standard @BBL X1C 0.2 nozzle", Inherits: "fdm_process_single_0.10_nozzle_0.2", Fields: map[string]any{
+		"name": "0.10mm Standard @BBL X1C 0.2 nozzle", "inherits": "fdm_process_single_0.10_nozzle_0.2", "from": "system",
+		"compatible_printers": []any{"Bambu Lab X1 Carbon 0.2 nozzle", "Bambu Lab P1S 0.2 nozzle"},
+	}}
 	leaf := &domain.RawProfile{Name: "My Custom @BBL X1C", Inherits: "0.20mm Standard @BBL X1C", Fields: map[string]any{
 		"name": "My Custom @BBL X1C", "inherits": "0.20mm Standard @BBL X1C", "from": "User", "wall_loops": "4",
 	}}
 	set := resolver.Set{}
-	for _, p := range []*domain.RawProfile{common, singleCommon, layerHeight, x1c, a1, leaf} {
+	for _, p := range []*domain.RawProfile{common, singleCommon, layerHeight, x1c, a1, nozzle02, x1c02, leaf} {
 		set[p.Name] = p
 	}
 	return set
@@ -123,6 +134,26 @@ func TestFindCandidateParentsByCompatiblePrintersMatchesRealCatalogShape(t *test
 		t.Fatalf("FindCandidateParentsByCompatiblePrinters: %v", err)
 	}
 	want := []string{"0.20mm Standard @BBL A1"}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("FindCandidateParentsByCompatiblePrinters = %v, want %v", got, want)
+	}
+}
+
+// TestFindCandidateParentsByCompatiblePrintersMatchesAcrossNozzleDiameters
+// is the real-world case that was live-broken: copying a process profile to
+// a different nozzle diameter of the same printer (X1C 0.6 -> X1C 0.2
+// nozzle) must find the real, catalog-verified parent for that diameter,
+// not fall through to the unfiltered same-family fallback (which is how a
+// wrong-material profile got picked by hand instead, live).
+func TestFindCandidateParentsByCompatiblePrintersMatchesAcrossNozzleDiameters(t *testing.T) {
+	set := processFixtureSet(t)
+	leaf := set["My Custom @BBL X1C"]
+
+	got, err := rebind.FindCandidateParentsByCompatiblePrinters(set, set, leaf, "Bambu Lab X1 Carbon 0.2 nozzle")
+	if err != nil {
+		t.Fatalf("FindCandidateParentsByCompatiblePrinters: %v", err)
+	}
+	want := []string{"0.10mm Standard @BBL X1C 0.2 nozzle"}
 	if len(got) != 1 || got[0] != want[0] {
 		t.Fatalf("FindCandidateParentsByCompatiblePrinters = %v, want %v", got, want)
 	}

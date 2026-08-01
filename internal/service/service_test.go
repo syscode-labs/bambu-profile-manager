@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -571,7 +572,7 @@ func TestCheckRecognitionResumesAfterInstalledLocally(t *testing.T) {
 	// Detector to confirm, as if it now fired.
 	svc.Detector = reconcile.ManualDetector{Confirmed: true}
 
-	second, err := svc.CheckRecognition(ctx, first.Deployment.ID, first.TargetProfile, first.PublishedPath,
+	second, err := svc.CheckRecognition(ctx, first.Deployment.ID, first.TargetProfile, first.PublishedPath, targetSet,
 		reconcile.InfoFields{}, reconcile.InfoFields{"updated_time": "1"})
 	if err != nil {
 		t.Fatalf("CheckRecognition: %v", err)
@@ -590,6 +591,75 @@ func TestCheckRecognitionResumesAfterInstalledLocally(t *testing.T) {
 	}
 	if !sawInstalledLocally {
 		t.Fatalf("CheckRecognition's deployment history lost the earlier INSTALLED_LOCALLY transition: %+v", second.Deployment.History)
+	}
+}
+
+// TestCheckRecognitionIgnoresHarmlessFieldDedupAfterRebind is the real bug
+// found live: Bambu Studio, on save, drops a leaf's own field once it
+// becomes redundant with a (possibly new, post-rebind) parent that already
+// defines the same value — e.g. "wall_loops" here. The effective settings
+// are identical; only which profile in the chain states them moved. Before
+// this fix, CheckRecognition hashed each side's raw own-fields, so this
+// harmless dedup read as SEMANTIC_MISMATCH.
+func TestCheckRecognitionIgnoresHarmlessFieldDedupAfterRebind(t *testing.T) {
+	ctx := context.Background()
+
+	root := &domain.RawProfile{Name: "root", Fields: map[string]any{"name": "root"}}
+	parent := &domain.RawProfile{Name: "Parent", Inherits: "root", Fields: map[string]any{
+		"name": "Parent", "inherits": "root", "from": "system", "wall_loops": "3",
+	}}
+	leaf := &domain.RawProfile{Name: "Child", Inherits: "root", Fields: map[string]any{
+		"name": "Child", "inherits": "root", "from": "User", "wall_loops": "3",
+	}}
+	set := resolver.Set{"root": root, "Parent": parent, "Child": leaf}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	dir := t.TempDir()
+	svc := &service.Service{
+		Repo:     repo,
+		Adapter:  &bambuadapter.LocalAdapter{Dir: dir, IsStudioRunning: func() (bool, error) { return false, nil }},
+		Detector: reconcile.ManualDetector{Confirmed: false}, // nothing to observe yet
+		NewID:    newID,
+	}
+	profile, err := repo.Profiles().Create(ctx, leaf.Name)
+	if err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+
+	first, err := svc.RebindAndPublish(ctx, set, set, leaf, []string{"Parent"}, profile.ID, "", "",
+		reconcile.InfoFields{}, reconcile.InfoFields{})
+	if err != nil {
+		t.Fatalf("RebindAndPublish: %v", err)
+	}
+	if first.Deployment.State != reconcile.StateInstalledLocally {
+		t.Fatalf("state = %s, want INSTALLED_LOCALLY", first.Deployment.State)
+	}
+
+	// Simulate Bambu Studio re-saving the published file: same effective
+	// settings, but "wall_loops" dropped from Child's own fields since
+	// Parent already provides the identical value.
+	deduped := map[string]any{"name": "Child", "inherits": "Parent", "from": "User"}
+	b, err := json.Marshal(deduped)
+	if err != nil {
+		t.Fatalf("marshal deduped: %v", err)
+	}
+	if err := os.WriteFile(first.PublishedPath, b, 0o644); err != nil {
+		t.Fatalf("simulate Studio save: %v", err)
+	}
+
+	svc.Detector = reconcile.ManualDetector{Confirmed: true}
+	second, err := svc.CheckRecognition(ctx, first.Deployment.ID, first.TargetProfile, first.PublishedPath, set,
+		reconcile.InfoFields{}, reconcile.InfoFields{"updated_time": "1"})
+	if err != nil {
+		t.Fatalf("CheckRecognition: %v", err)
+	}
+	if second.Deployment.State != reconcile.StateActive {
+		t.Fatalf("state after harmless field dedup = %s, want ACTIVE (history: %+v)", second.Deployment.State, second.Deployment.History)
 	}
 }
 

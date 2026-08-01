@@ -15,7 +15,7 @@ func TestStatusLabelAndClassesBucketByOutcome(t *testing.T) {
 	}{
 		{"ACTIVE", "VERIFIED", "bg-emerald-100 text-emerald-700"},
 		{"ROUND_TRIP_VERIFIED", "VERIFIED", "bg-emerald-100 text-emerald-700"},
-		{"INSTALLED_LOCALLY", "AWAITING SAVE IN STUDIO", "bg-amber-100 text-amber-700"},
+		{"INSTALLED_LOCALLY", "AWAITING EXPLICIT MANUAL SAVE IN STUDIO", "bg-amber-100 text-amber-700"},
 		{"STAGED", "IN PROGRESS", "bg-amber-100 text-amber-700"},
 		{"SEMANTIC_MISMATCH", "SEMANTIC_MISMATCH", "bg-red-100 text-red-700"},
 	}

@@ -197,7 +197,10 @@ func cmdCheckRecognition(args []string) {
 	}
 
 	svc := &service.Service{Repo: repo, Adapter: &bambuadapter.LocalAdapter{Dir: userDir}, Detector: reconcile.RewriteDetector{}}
-	result, err := svc.CheckRecognition(ctx, deploymentID, targetProfile, publishedPath, reconcile.InfoFields{}, afterInfo)
+	// nil: this command has no --system-dir flag to build a full resolver.Set
+	// from, so it keeps today's raw-fields comparison rather than partially
+	// resolving against --user-dir alone.
+	result, err := svc.CheckRecognition(ctx, deploymentID, targetProfile, publishedPath, nil, reconcile.InfoFields{}, afterInfo)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "check-recognition:", err)
 	}
