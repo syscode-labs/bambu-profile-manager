@@ -47,6 +47,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /profiles/{id}", s.handleProfile)
 	mux.HandleFunc("GET /profiles/{id}/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /live/{name}", s.handleLiveProfile)
+	mux.HandleFunc("GET /api/profile-preview", s.handleProfilePreviewFragment)
 	mux.HandleFunc("GET /compare", s.handleComparePage)
 	mux.HandleFunc("GET /import", s.handleImportForm)
 	mux.HandleFunc("POST /import", s.handleImport)
@@ -192,21 +193,34 @@ var liveProfileTmpl = template.Must(template.New("liveProfile").Parse(`
 <a href="/copy" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Copy to another printer &rarr;</a>
 `))
 
-func (s *Server) handleLiveProfile(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+// resolveLiveFields scans the live Bambu Studio directories and resolves
+// name's full effective (flattened) fields — shared by the live-profile
+// page and the copy form's hover preview, so both read the same real data.
+func (s *Server) resolveLiveFields(name string) (map[string]any, error) {
 	set, err := resolver.LoadDirs(append([]string{s.UserDir}, s.SystemDirs...))
 	if err != nil {
-		httpError(w, err)
-		return
+		return nil, err
 	}
 	leaf, ok := set[name]
 	if !ok {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+		return nil, storage.ErrNotFound
 	}
 	effective, _, err := resolver.Resolve(set, leaf)
 	if err != nil {
-		http.Error(w, "resolve: "+err.Error(), http.StatusInternalServerError)
+		return nil, err
+	}
+	return effective.Fields, nil
+}
+
+func (s *Server) handleLiveProfile(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	fields, err := s.resolveLiveFields(name)
+	if errors.Is(err, storage.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		httpError(w, err)
 		return
 	}
 
@@ -215,8 +229,59 @@ func (s *Server) handleLiveProfile(w http.ResponseWriter, r *http.Request) {
 		Summary []summaryField
 		Color   string
 		Groups  []fieldGroup
-	}{Name: name, Summary: profileSummary(effective.Fields), Color: profileColor(effective.Fields), Groups: groupedFields(effective.Fields)}
+	}{Name: name, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
 	renderPage(w, liveProfileTmpl, data, name, name, "", "profiles", "")
+}
+
+var previewFragmentTmpl = template.Must(template.New("previewFragment").Parse(`
+<div class="flex items-center gap-2 mb-2">
+  {{if .Color}}<span class="w-4 h-4 rounded-full border border-zinc-200 shrink-0" style="background:{{.Color}}"></span>{{end}}
+  <span class="font-semibold text-zinc-800">{{.Name}}</span>
+</div>
+{{if .Summary}}
+<dl class="space-y-1 mb-3">
+{{range .Summary}}<div class="flex justify-between gap-3"><dt class="text-zinc-500">{{.Label}}</dt><dd class="font-medium text-right">{{.Value}}</dd></div>{{end}}
+</dl>
+{{else}}<p class="text-zinc-400 mb-3">No recognizable summary fields.</p>{{end}}
+{{range .Groups}}
+<p class="text-zinc-400 font-semibold uppercase tracking-wide text-[10px] mt-2 mb-1">{{.Title}}</p>
+{{range .Rows}}<div class="flex justify-between gap-3"><span class="text-zinc-500">{{.Key}}</span><span class="font-mono text-right break-all">{{.Value}}</span></div>{{end}}
+{{end}}
+`))
+
+// handleProfilePreviewFragment returns a small HTML fragment (no page
+// shell) of a profile's summary + settings, for the copy form's hover
+// preview button to fetch via a tiny bit of vanilla JS (no framework, no
+// build step — see webui.go's package doc).
+func (s *Server) handleProfilePreviewFragment(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	fields, err := s.resolveLiveFields(name)
+	if errors.Is(err, storage.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	data := struct {
+		Name    string
+		Summary []summaryField
+		Color   string
+		Groups  []fieldGroup
+	}{Name: name, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
+
+	var buf bytes.Buffer
+	if err := previewFragmentTmpl.Execute(&buf, data); err != nil {
+		http.Error(w, "render: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	buf.WriteTo(w)
 }
 
 var profileTmpl = template.Must(template.New("profile").Parse(`

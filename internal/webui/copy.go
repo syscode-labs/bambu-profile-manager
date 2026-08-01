@@ -142,9 +142,17 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
   <div class="grid grid-cols-2 gap-4">
     <label class="block">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">Profile</span>
-      <select name="name" required class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
-      {{range .Names}}<option value="{{.}}">{{.}}</option>{{end}}
-      </select>
+      <div class="flex items-center gap-2">
+        <select id="copy-profile-select" name="name" required class="flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+        {{range .Names}}<option value="{{.}}">{{.}}</option>{{end}}
+        </select>
+        <div class="relative shrink-0">
+          <button type="button" id="filament-preview-btn"
+            class="w-8 h-8 rounded-lg border border-zinc-300 text-zinc-400 hover:text-zinc-700 hover:border-zinc-400 text-xs flex items-center justify-center"
+            aria-label="Preview filament properties">&#9432;</button>
+          <div id="filament-preview-popup" class="hidden absolute right-0 top-9 z-20 w-80 max-h-96 overflow-y-auto bg-white border border-zinc-200 rounded-xl shadow-lg p-4 text-xs"></div>
+        </div>
+      </div>
     </label>
     <label class="block">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">Target printer</span>
@@ -157,6 +165,36 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
   <button type="submit" class="px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition">Find match</button>
 </form>
 </section>
+<script>
+(function() {
+  var select = document.getElementById('copy-profile-select');
+  var btn = document.getElementById('filament-preview-btn');
+  var popup = document.getElementById('filament-preview-popup');
+  if (!select || !btn || !popup) return;
+  var cache = {};
+  function load(name) {
+    if (Object.prototype.hasOwnProperty.call(cache, name)) {
+      popup.innerHTML = cache[name];
+      return;
+    }
+    popup.innerHTML = '<p class="text-zinc-400">Loading…</p>';
+    fetch('/api/profile-preview?name=' + encodeURIComponent(name))
+      .then(function(r) { return r.ok ? r.text() : Promise.reject(r.status); })
+      .then(function(html) { cache[name] = html; popup.innerHTML = html; })
+      .catch(function() { popup.innerHTML = '<p class="text-red-500">Could not load preview.</p>'; });
+  }
+  btn.addEventListener('mouseenter', function() {
+    if (select.value) load(select.value);
+    popup.classList.remove('hidden');
+  });
+  btn.addEventListener('focus', function() {
+    if (select.value) load(select.value);
+    popup.classList.remove('hidden');
+  });
+  btn.addEventListener('mouseleave', function() { popup.classList.add('hidden'); });
+  btn.addEventListener('blur', function() { popup.classList.add('hidden'); });
+})();
+</script>
 `))
 
 func (s *Server) handleCopyForm(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +235,7 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
     <span class="w-5 h-5 rounded-full bg-zinc-900 text-white text-xs flex items-center justify-center shrink-0">2</span>
     Pick a parent
   </div>
-  <p class="text-sm text-zinc-500">{{len .Candidates}} profiles match both the material and "{{.PrinterToken}}" &mdash; this tool won't guess between them. Add more of the printer name (e.g. the nozzle size) on the previous step to narrow it to one, or just pick below.</p>
+  <p class="text-sm text-zinc-500">In Bambu Studio, every filament profile inherits its settings from a base "parent" profile &mdash; that's how "@P1S" or "@X1C" variants share most of their settings. {{len .Candidates}} base profiles match both this filament's material and "{{.PrinterToken}}", so this tool won't guess which one your copy should inherit from. Add more of the printer name (e.g. the nozzle size) on the previous step to narrow it to one, or just pick the correct base profile below.</p>
   {{$name := .Name}}{{$token := .PrinterToken}}
   {{range .Candidates}}
   <form method="post" action="/copy/publish" class="border border-zinc-200 rounded-xl p-4 space-y-3">

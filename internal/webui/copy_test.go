@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -380,6 +381,43 @@ func TestCompareAcrossThreeDifferentProfiles(t *testing.T) {
 // had recorded (via Import/Copy), not everything actually present in the
 // user's Bambu Studio directory. With --user-dir set, untracked profiles
 // must still appear, marked as such, and be viewable read-only via /live.
+// TestProfilePreviewFragmentReturnsSummary covers the copy form's hover
+// preview button: /api/profile-preview?name=... must return a bare HTML
+// fragment (no page shell) with the profile's summary fields.
+func TestProfilePreviewFragmentReturnsSummary(t *testing.T) {
+	ts, _ := newTestServerWithLiveDir(t)
+
+	resp, err := http.Get(ts.URL + "/api/profile-preview?name=" + url.QueryEscape("Syscode - AmazonBasics ABS 0.6"))
+	if err != nil {
+		t.Fatalf("GET /api/profile-preview: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "Syscode - AmazonBasics ABS 0.6") {
+		t.Fatalf("fragment missing profile name: %s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "<html") || strings.Contains(bodyStr, "<nav") {
+		t.Fatalf("fragment should not include the page shell: %s", bodyStr)
+	}
+}
+
+func TestProfilePreviewFragmentNotFound(t *testing.T) {
+	ts, _ := newTestServerWithLiveDir(t)
+
+	resp, err := http.Get(ts.URL + "/api/profile-preview?name=" + url.QueryEscape("Does Not Exist"))
+	if err != nil {
+		t.Fatalf("GET /api/profile-preview: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestIndexShowsUntrackedLiveProfiles(t *testing.T) {
 	ts, _ := newTestServerWithLiveDir(t)
 
