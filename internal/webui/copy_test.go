@@ -244,3 +244,73 @@ func TestBackupsListAndRestoreEndToEnd(t *testing.T) {
 		t.Fatalf("restored content does not match original snapshot")
 	}
 }
+
+// TestStudioRunningWarningShownAndPublishBlocked proves the UI actually
+// warns before publishing and refuses (with a clear callout, not a raw
+// error) when Bambu Studio looks like it's running — the gap flagged after
+// the web UI first shipped without any such warning.
+func TestStudioRunningWarningShownAndPublishBlocked(t *testing.T) {
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	liveDir := t.TempDir()
+	flattenFixturesInto(t, liveDir)
+
+	svc := &service.Service{
+		Repo:       repo,
+		Adapter:    &bambuadapter.LocalAdapter{Dir: liveDir, IsStudioRunning: func() (bool, error) { return true, nil }},
+		Detector:   reconcile.RewriteDetector{},
+		NewID:      newTestID,
+		BackupsDir: t.TempDir(),
+	}
+	srv := &webui.Server{Svc: svc, UserDir: liveDir}
+	ts := httptest.NewServer(srv.Routes())
+	t.Cleanup(ts.Close)
+
+	formResp, err := http.Get(ts.URL + "/copy")
+	if err != nil {
+		t.Fatalf("GET /copy: %v", err)
+	}
+	defer formResp.Body.Close()
+	formBody, _ := io.ReadAll(formResp.Body)
+	if !strings.Contains(string(formBody), "Bambu Studio appears to be running") {
+		t.Fatalf("copy form did not warn that Studio is running: %s", formBody)
+	}
+
+	previewResp, err := http.PostForm(ts.URL+"/copy/preview", map[string][]string{
+		"name":          {"Syscode - AmazonBasics ABS 0.6"},
+		"printer_token": {"P1S"},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/preview: %v", err)
+	}
+	defer previewResp.Body.Close()
+	previewBody, _ := io.ReadAll(previewResp.Body)
+	if !strings.Contains(string(previewBody), "Bambu Studio appears to be running") {
+		t.Fatalf("preview page did not warn that Studio is running: %s", previewBody)
+	}
+
+	publishResp, err := http.PostForm(ts.URL+"/copy/publish", map[string][]string{
+		"name":         {"Syscode - AmazonBasics ABS 0.6"},
+		"parent":       {"Bambu ABS @BBL P1S 0.4 nozzle"},
+		"confirm_name": {"Blocked @P1S"},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/publish: %v", err)
+	}
+	defer publishResp.Body.Close()
+	if publishResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("publish while Studio running status = %d, want 422", publishResp.StatusCode)
+	}
+	publishBody, _ := io.ReadAll(publishResp.Body)
+	if !strings.Contains(string(publishBody), "Bambu Studio is running") {
+		t.Fatalf("blocked-publish page missing the clear callout: %s", publishBody)
+	}
+
+	if _, err := os.Stat(filepath.Join(liveDir, "Blocked @P1S.json")); err == nil {
+		t.Fatal("file was published even though Studio was reported running")
+	}
+}

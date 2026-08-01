@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"html/template"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
 	"github.com/syscod3/bambu-profile-manager/internal/rebind"
 	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
 	"github.com/syscod3/bambu-profile-manager/internal/resolver"
@@ -15,14 +17,41 @@ import (
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
 )
 
+// studioWarning checks whether Bambu Studio looks like it's running right
+// now (the same best-effort pgrep check bambuadapter.Publish enforces) and
+// returns a callout banner if so, or if the check itself failed (decisions
+// #4: an unknown result must not be silently treated as "not running").
+// Empty when Studio is confirmed closed.
+func (s *Server) studioWarning() template.HTML {
+	if s.Svc == nil || s.Svc.Adapter == nil {
+		return ""
+	}
+	checker := s.Svc.Adapter.IsStudioRunning
+	if checker == nil {
+		checker = bambuadapter.PgrepStudioRunning
+	}
+	running, err := checker()
+	if err != nil {
+		return template.HTML(`<div style="background:#fff3cd;border:1px solid #cc9a06;padding:0.75em;margin-bottom:1em">` +
+			`&#9888; Could not determine whether Bambu Studio is running (` + template.HTMLEscapeString(err.Error()) + `). ` +
+			`Publishing will refuse on its own if it turns out to be open.</div>`)
+	}
+	if running {
+		return template.HTML(`<div style="background:#f8d7da;border:1px solid #dc3545;padding:0.75em;margin-bottom:1em">` +
+			`<strong>&#9888; Bambu Studio appears to be running.</strong> Publishing requires it closed first. Close Studio, then continue.</div>`)
+	}
+	return ""
+}
+
 var copyFormTmpl = template.Must(template.New("copyForm").Parse(`<!doctype html>
 <html><head><title>Copy to another printer</title></head><body>
 <p><a href="/">&larr; All profiles</a></p>
+{{.Warning}}
 <h1>Copy a filament profile to another printer</h1>
 <form method="post" action="/copy/preview">
 <p>Profile:
 <select name="name" required>
-{{range .}}<option value="{{.}}">{{.}}</option>{{end}}
+{{range .Names}}<option value="{{.}}">{{.}}</option>{{end}}
 </select></p>
 <p>Target printer (e.g. "P1S" or "P1S 0.4" to also pin the nozzle):
 <input type="text" name="printer_token" required></p>
@@ -40,12 +69,17 @@ func (s *Server) handleCopyForm(w http.ResponseWriter, r *http.Request) {
 	for name := range set {
 		names = append(names, name)
 	}
-	renderOrError(w, copyFormTmpl, names)
+	data := struct {
+		Names   []string
+		Warning template.HTML
+	}{Names: names, Warning: s.studioWarning()}
+	renderOrError(w, copyFormTmpl, data)
 }
 
 var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`<!doctype html>
 <html><head><title>Copy preview</title></head><body>
 <p><a href="/copy">&larr; Start over</a></p>
+{{.Warning}}
 <h1>Copy preview: {{.Name}} &rarr; {{.PrinterToken}}</h1>
 {{if not .Candidates}}
 <p>No matching parent found under "{{.PrinterToken}}" for this profile's material. Nothing safe to auto-map.</p>
@@ -103,9 +137,19 @@ func (s *Server) handleCopyPreview(w http.ResponseWriter, r *http.Request) {
 		Name         string
 		PrinterToken string
 		Candidates   []string
-	}{Name: name, PrinterToken: printerToken, Candidates: candidates}
+		Warning      template.HTML
+	}{Name: name, PrinterToken: printerToken, Candidates: candidates, Warning: s.studioWarning()}
 	renderOrError(w, copyPreviewTmpl, data)
 }
+
+var studioBlockedTmpl = template.Must(template.New("studioBlocked").Parse(`<!doctype html>
+<html><head><title>Bambu Studio is open</title></head><body>
+<p><a href="/copy">&larr; Back</a></p>
+<div style="background:#f8d7da;border:1px solid #dc3545;padding:1em">
+<h1>&#9888; Publish refused: Bambu Studio is running</h1>
+<p>Publishing writes directly into Bambu Studio's profile directory and needs it closed first. Close Bambu Studio, then submit again — nothing was written.</p>
+</div>
+</body></html>`))
 
 var copyResultTmpl = template.Must(template.New("copyResult").Parse(`<!doctype html>
 <html><head><title>Copy result</title></head><body>
@@ -155,6 +199,15 @@ func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.Svc.RebindAndPublish(ctx, set, set, leaf, []string{parent}, profile.ID, confirmName,
 		reconcile.InfoFields{}, reconcile.InfoFields{})
+	if errors.Is(err, bambuadapter.ErrStudioRunning) {
+		var buf bytes.Buffer
+		if tmplErr := studioBlockedTmpl.Execute(&buf, nil); tmplErr == nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			buf.WriteTo(w)
+			return
+		}
+	}
 	if err != nil {
 		http.Error(w, "copy: "+err.Error(), http.StatusUnprocessableEntity)
 		return
@@ -247,10 +300,11 @@ func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) 
 var backupsTmpl = template.Must(template.New("backups").Parse(`<!doctype html>
 <html><head><title>Backups</title></head><body>
 <p><a href="/">&larr; All profiles</a></p>
+{{.Warning}}
 <h1>Backups</h1>
 <p>Point-in-time snapshots taken automatically before every publish.</p>
 <ul>
-{{range .}}
+{{range .List}}
 <li>{{.At.Format "2006-01-02 15:04:05 MST"}} (<code>{{.Name}}</code>)
 <form method="post" action="/backups/{{.Name}}/restore" style="display:inline">
 <button type="submit" onclick="return confirm('Restore this snapshot? Overwrites files present in it, does not delete anything added since.')">Restore</button>
@@ -266,7 +320,11 @@ func (s *Server) handleBackupsList(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
-	renderOrError(w, backupsTmpl, list)
+	data := struct {
+		List    any
+		Warning template.HTML
+	}{List: list, Warning: s.studioWarning()}
+	renderOrError(w, backupsTmpl, data)
 }
 
 func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
