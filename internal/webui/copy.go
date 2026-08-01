@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
 	"github.com/syscod3/bambu-profile-manager/internal/rebind"
@@ -16,6 +18,33 @@ import (
 	"github.com/syscod3/bambu-profile-manager/internal/service"
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
 )
+
+// discoverPrinterTokens extracts distinct printer segments from system
+// profile names, e.g. "Bambu ABS @BBL P1S 0.4 nozzle" -> "P1S 0.4 nozzle".
+// These are guaranteed to regex-match in rebind.FindCandidateParents since
+// they're pulled verbatim from the names it searches — better than asking
+// the user to free-type a token that might not exist in any real profile.
+func discoverPrinterTokens(set resolver.Set) []string {
+	seen := map[string]bool{}
+	for name := range set {
+		at := strings.Index(name, "@")
+		if at == -1 {
+			continue
+		}
+		rest := name[at+1:] // e.g. "BBL P1S 0.4 nozzle"
+		vendor, printer, ok := strings.Cut(rest, " ")
+		if !ok || vendor == "" || printer == "" {
+			continue
+		}
+		seen[printer] = true
+	}
+	tokens := make([]string, 0, len(seen))
+	for t := range seen {
+		tokens = append(tokens, t)
+	}
+	sort.Strings(tokens)
+	return tokens
+}
 
 // studioWarning checks whether Bambu Studio looks like it's running right
 // now (the same best-effort pgrep check bambuadapter.Publish enforces) and
@@ -64,10 +93,11 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
       </select>
     </label>
     <label class="block">
-      <span class="text-xs font-medium text-zinc-500 mb-1 block">Target printer (e.g. "P1S" or "P1S 0.4" to pin the nozzle)</span>
-      <input type="text" name="printer_token" required placeholder="P1S 0.4"
-        class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
-      <span class="text-xs text-zinc-400 mt-1 block">Just the printer works ("P1S"); add the nozzle size ("P1S 0.4") if that alone leaves more than one match.</span>
+      <span class="text-xs font-medium text-zinc-500 mb-1 block">Target printer</span>
+      <select name="printer_token" required class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+      {{range .Printers}}<option value="{{.}}">{{.}}</option>{{end}}
+      </select>
+      <span class="text-xs text-zinc-400 mt-1 block">Pulled from real profile names in your Bambu Studio system library, so it's guaranteed to match something.</span>
     </label>
   </div>
   <button type="submit" class="px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition">Find match</button>
@@ -85,7 +115,19 @@ func (s *Server) handleCopyForm(w http.ResponseWriter, r *http.Request) {
 	for name := range set {
 		names = append(names, name)
 	}
-	data := struct{ Names []string }{Names: names}
+	sort.Strings(names)
+
+	fullSet, err := resolver.LoadDirs(append([]string{s.UserDir}, s.SystemDirs...))
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	printers := discoverPrinterTokens(fullSet)
+
+	data := struct {
+		Names    []string
+		Printers []string
+	}{Names: names, Printers: printers}
 	renderPage(w, copyFormTmpl, data, "Copy", "Copy a filament profile to another printer", "Rebind without touching dependency chains yourself.", "copy", s.studioWarning())
 }
 

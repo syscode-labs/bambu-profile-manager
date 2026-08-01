@@ -16,7 +16,10 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
+	"sort"
 
+	"github.com/syscod3/bambu-profile-manager/internal/resolver"
 	"github.com/syscod3/bambu-profile-manager/internal/service"
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
 )
@@ -37,6 +40,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /profiles/{id}", s.handleProfile)
 	mux.HandleFunc("GET /profiles/{id}/deployments", s.handleDeployments)
+	mux.HandleFunc("GET /live/{name}", s.handleLiveProfile)
 	mux.HandleFunc("GET /compare", s.handleComparePage)
 	mux.HandleFunc("GET /import", s.handleImportForm)
 	mux.HandleFunc("POST /import", s.handleImport)
@@ -78,29 +82,135 @@ var indexTmpl = template.Must(template.New("index").Parse(`
 </div>
 
 <div>
-  <h2 class="text-sm font-medium text-zinc-500 mb-3">Tracked profiles</h2>
+  <h2 class="text-sm font-medium text-zinc-500 mb-3">All profiles</h2>
   {{if .}}
   <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm divide-y divide-zinc-100">
-  {{range .}}<a href="/profiles/{{.ID}}" class="flex items-center justify-between px-5 py-3.5 hover:bg-zinc-50 transition first:rounded-t-2xl last:rounded-b-2xl">
+  {{range .}}<a href="{{.Link}}" class="flex items-center justify-between px-5 py-3.5 hover:bg-zinc-50 transition first:rounded-t-2xl last:rounded-b-2xl">
     <span class="text-sm font-medium text-zinc-800">{{.Name}}</span>
-    <svg class="w-4 h-4 text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+    <div class="flex items-center gap-2">
+      {{if not .Tracked}}<span class="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500">not tracked</span>{{end}}
+      <svg class="w-4 h-4 text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+    </div>
   </a>{{end}}
   </div>
   {{else}}
   <div class="text-center py-12 text-zinc-400 bg-white rounded-2xl border border-dashed border-zinc-200">
-    <p class="text-sm">Nothing tracked yet &mdash; a profile appears here after you Import a bundle or Copy one to another printer.</p>
+    <p class="text-sm">No profiles found. Point <code class="bg-zinc-100 px-1 rounded">bambupm serve</code> at your Bambu Studio directory with --user-dir, or Import a bundle.</p>
   </div>
   {{end}}
 </div>
 `))
 
+type indexProfile struct {
+	Name    string
+	Tracked bool
+	Link    string
+}
+
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	profiles, err := s.Svc.Repo.Profiles().List(r.Context())
+	ctx := r.Context()
+	tracked, err := s.Svc.Repo.Profiles().List(ctx)
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	renderPage(w, indexTmpl, profiles, "Profiles", "Bambu Profile Manager", "", "profiles", "")
+	trackedIDByName := map[string]string{}
+	for _, p := range tracked {
+		trackedIDByName[p.Name] = p.ID
+	}
+
+	var items []indexProfile
+	if s.UserDir != "" {
+		set, err := resolver.LoadDirs([]string{s.UserDir})
+		if err != nil {
+			httpError(w, err)
+			return
+		}
+		names := make([]string, 0, len(set))
+		for name := range set {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if id, ok := trackedIDByName[name]; ok {
+				items = append(items, indexProfile{Name: name, Tracked: true, Link: "/profiles/" + id})
+			} else {
+				items = append(items, indexProfile{Name: name, Tracked: false, Link: "/live/" + url.PathEscape(name)})
+			}
+		}
+	} else {
+		// No live directory configured (e.g. `serve` without --user-dir) —
+		// fall back to whatever's tracked in the db.
+		for _, p := range tracked {
+			items = append(items, indexProfile{Name: p.Name, Tracked: true, Link: "/profiles/" + p.ID})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	}
+
+	renderPage(w, indexTmpl, items, "Profiles", "Bambu Profile Manager", "", "profiles", "")
+}
+
+var liveProfileTmpl = template.Must(template.New("liveProfile").Parse(`
+<p><a href="/" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; All profiles</a></p>
+<div class="flex items-start gap-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-xl px-4 py-3 text-sm">
+  <span>&#8505;</span>
+  <div>
+    <p class="font-medium">Not tracked yet</p>
+    <p class="text-blue-700/80">This is a live read straight from your Bambu Studio directory. Copy it to another printer or Import a bundle to start recording revision history and unlock Compare.</p>
+  </div>
+</div>
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <div class="flex items-center gap-3">
+    {{if .Color}}<span class="w-6 h-6 rounded-full border border-zinc-200 shrink-0" style="background:{{.Color}}"></span>{{end}}
+    <h2 class="text-sm font-semibold">{{.Name}}</h2>
+  </div>
+  {{if .Summary}}
+  <dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+  {{range .Summary}}<div class="flex justify-between border-b border-zinc-50 pb-1"><dt class="text-zinc-500">{{.Label}}</dt><dd class="font-medium">{{.Value}}</dd></div>{{end}}
+  </dl>
+  {{end}}
+  <details class="text-sm" open>
+    <summary class="cursor-pointer text-zinc-500 hover:text-zinc-800">All settings</summary>
+    <div class="mt-3 space-y-4">
+    {{range .Groups}}
+    <div>
+      <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">{{.Title}}</h4>
+      <div class="rounded-xl border border-zinc-100 divide-y divide-zinc-50">
+      {{range .Rows}}<div class="flex justify-between px-3 py-1.5 text-xs"><span class="text-zinc-500">{{.Key}}</span><span class="font-mono break-all text-right">{{.Value}}</span></div>{{end}}
+      </div>
+    </div>
+    {{end}}
+    </div>
+  </details>
+</section>
+<a href="/copy" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Copy to another printer &rarr;</a>
+`))
+
+func (s *Server) handleLiveProfile(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	set, err := resolver.LoadDirs(append([]string{s.UserDir}, s.SystemDirs...))
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	leaf, ok := set[name]
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	effective, _, err := resolver.Resolve(set, leaf)
+	if err != nil {
+		http.Error(w, "resolve: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := struct {
+		Name    string
+		Summary []summaryField
+		Color   string
+		Groups  []fieldGroup
+	}{Name: name, Summary: profileSummary(effective.Fields), Color: profileColor(effective.Fields), Groups: groupedFields(effective.Fields)}
+	renderPage(w, liveProfileTmpl, data, name, name, "", "profiles", "")
 }
 
 var profileTmpl = template.Must(template.New("profile").Parse(`

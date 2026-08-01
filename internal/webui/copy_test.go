@@ -374,3 +374,43 @@ func TestCompareAcrossThreeDifferentProfiles(t *testing.T) {
 		t.Fatalf("compare page did not highlight the differing row: %s", bodyStr)
 	}
 }
+
+// TestIndexShowsUntrackedLiveProfiles guards against the real gap found
+// after shipping: the landing page only listed profiles bambupm's own db
+// had recorded (via Import/Copy), not everything actually present in the
+// user's Bambu Studio directory. With --user-dir set, untracked profiles
+// must still appear, marked as such, and be viewable read-only via /live.
+func TestIndexShowsUntrackedLiveProfiles(t *testing.T) {
+	ts, _ := newTestServerWithLiveDir(t)
+
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "Syscode - AmazonBasics ABS 0.6") {
+		t.Fatalf("index missing the untracked live profile: %s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "not tracked") {
+		t.Fatalf("index did not mark the untracked profile as such: %s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "/live/") {
+		t.Fatalf("index did not link the untracked profile to /live/: %s", bodyStr)
+	}
+
+	liveResp, err := http.Get(ts.URL + "/live/Syscode%20-%20AmazonBasics%20ABS%200.6")
+	if err != nil {
+		t.Fatalf("GET /live/...: %v", err)
+	}
+	defer liveResp.Body.Close()
+	if liveResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /live/... status = %d, want 200", liveResp.StatusCode)
+	}
+	liveBody, _ := io.ReadAll(liveResp.Body)
+	if !strings.Contains(string(liveBody), "Not tracked yet") {
+		t.Fatalf("live profile page missing the not-tracked explanation: %s", liveBody)
+	}
+}
