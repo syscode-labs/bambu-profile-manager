@@ -29,7 +29,8 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 - [ ] Agent G (remaining): dependency graph view, rebind page, deployments/rollback page — need the export-from-live-filesystem path and Deployment storage wired first
 - [ ] Agent H: Ristretto cache, revision-based keys, dependency-aware invalidation, singleflight, WebSocket hub, bounded queues — **deferred until real usage shows a need**, not built up front (decisions.md #7)
 - [x] Agent I (partial): multi-stage Dockerfile (`--platform=$BUILDPLATFORM` + `TARGETOS`/`TARGETARCH`, CGO-free via the pure-Go sqlite driver so amd64/arm64 cross-compile needs no C toolchain), `docker-compose.yml`, `README.md` with run instructions. Built and smoke-tested locally (image builds, container serves the web UI). **Known limitation documented in README**: the Studio-running publish guard (`pgrep`) can't see host processes from inside a container — publish must run natively on the host, not through Docker, until resolved.
-- [ ] Agent I (remaining): CI workflow, release artifacts
+- [x] Agent I: CI workflow — `.github/workflows/ci.yml` (build/vet/test -race, fuzz smoke test, multi-platform Docker build check). Underlying commands verified locally (race-clean test run); the workflow YAML itself validated for syntax.
+- [ ] Agent I (remaining): release artifacts
 - Exit gate: `docker compose up` runs a working local instance — proven (`docker build` + container smoke test passed); against a bind-mounted Bambu directory specifically is deferred until rebind/publish are exposed as CLI commands (see "Known limitations" in README)
 
 ## Deferred (post-v1)
