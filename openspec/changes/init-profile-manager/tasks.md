@@ -9,9 +9,9 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 - Exit gate: `semantic(source) == semantic(reimport(export(source)))` for one real fixture — resolver+hash half proven (deterministic hash on real chain); full export/reimport round trip needs Phase 1's bundle work.
 
 ## Phase 1 — Portable core
-- [ ] Agent C: repository interfaces, SQLite impl + migrations, immutable versions, contract tests
-- [ ] Agent D: `.profilepack` schema, manifest, dependency-closure export, checksums, lossless round-trip tests
-- Exit gate: discover → resolve → export → delete source → import → resolve identically
+- [x] Agent C: repository interfaces, SQLite impl + migrations, immutable versions, contract tests — `internal/storage`, `internal/storage/sqlite`, `internal/storage/storagetest` (Bindings/Deployments repos added when Phase 2/3 need them, per §24 narrow-slice guardrail)
+- [x] Agent D: `.profilepack` schema, manifest, dependency-closure export, checksums, lossless round-trip tests — `internal/bundle`
+- [x] Exit gate: discover → resolve → export → delete source → import → resolve identically — proven in `internal/bundle/roundtrip_test.go` against the real ABS fixture chain (set discarded between export and import)
 
 ## Phase 2 — Rebinding
 - [ ] Agent E: source/target binding model, target-parent mapping, chain cloning/flattening, semantic diff
