@@ -156,13 +156,16 @@ func TestDiscoverRealPrintersResolvesInheritedModel(t *testing.T) {
 		Name: "Bambu Lab X1 Carbon 0.4 nozzle",
 		Fields: map[string]any{
 			"name": "Bambu Lab X1 Carbon 0.4 nozzle", "printer_model": "Bambu Lab X1 Carbon",
-			"nozzle_diameter": []any{"0.4"},
+			"nozzle_diameter": []any{"0.4"}, "from": "system",
 		},
 	}
 	userProfile := &domain.RawProfile{
-		Name: "Bambu Lab X1 Carbon 0.4 nozzle - Obsidian HF",
+		Name:     "Bambu Lab X1 Carbon 0.4 nozzle - Obsidian HF",
 		Inherits: "Bambu Lab X1 Carbon 0.4 nozzle",
-		Fields: map[string]any{"name": "Bambu Lab X1 Carbon 0.4 nozzle - Obsidian HF", "inherits": "Bambu Lab X1 Carbon 0.4 nozzle"},
+		Fields: map[string]any{
+			"name": "Bambu Lab X1 Carbon 0.4 nozzle - Obsidian HF", "inherits": "Bambu Lab X1 Carbon 0.4 nozzle",
+			"from": "User", // discoverRealPrinters only lists the user's own printers, not every system template
+		},
 	}
 	set := resolver.Set{template.Name: template, userProfile.Name: userProfile}
 
@@ -178,5 +181,28 @@ func TestDiscoverRealPrintersResolvesInheritedModel(t *testing.T) {
 	}
 	if found.Token != "X1C 0.4" {
 		t.Fatalf("Token = %q, want %q (resolved via inheritance, not name parsing)", found.Token, "X1C 0.4")
+	}
+}
+
+// TestDiscoverRealPrintersExcludesSystemTemplatesUserDoesNotOwn is a real
+// bug found live: a profile copied to "X1" (a printer the user has never
+// configured) published without error and never appeared in Bambu Studio,
+// because the dropdown listed every Bambu-made model from the system
+// catalog, not just printers the user actually owns.
+func TestDiscoverRealPrintersExcludesSystemTemplatesUserDoesNotOwn(t *testing.T) {
+	systemOnlyX1 := &domain.RawProfile{
+		Name: "Bambu Lab X1 0.4 nozzle",
+		Fields: map[string]any{
+			"name": "Bambu Lab X1 0.4 nozzle", "printer_model": "Bambu Lab X1",
+			"nozzle_diameter": []any{"0.4"}, "from": "system",
+		},
+	}
+	set := resolver.Set{systemOnlyX1.Name: systemOnlyX1}
+
+	printers := discoverRealPrinters(set)
+	for _, p := range printers {
+		if p.Name == systemOnlyX1.Name {
+			t.Fatalf("discoverRealPrinters included a system-only template the user doesn't own: %+v", p)
+		}
 	}
 }

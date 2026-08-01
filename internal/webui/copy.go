@@ -48,14 +48,24 @@ func shortPrinterToken(printerModel, nozzleDiameter string) string {
 // HF"), Token is the short code passed to rebind.FindCandidateParents.
 type printerOption struct{ Name, Token string }
 
-// discoverRealPrinters scans the user's actual machine (printer) profiles
-// — not filament profiles — and resolves each one's inheritance chain to
-// get its authoritative printer_model/nozzle_diameter, rather than parsing
-// or guessing from a display name. Profiles with no resolvable
-// printer_model (e.g. internal template fragments) are skipped.
+// discoverRealPrinters lists only the user's OWN configured printers as
+// selectable options — machineSet must include the full user+system tree so
+// inheritance resolves, but every Bambu-made model exists as a system
+// template regardless of what the user actually owns (found live: a
+// profile copied to "X1" published fine but never appeared in Studio,
+// because the user has no X1 — only X1 Carbon — configured; system
+// profiles have `"from": "system"`, the user's own have `"from": "User"`,
+// see findings.md). Resolves each candidate's inheritance chain for its
+// authoritative printer_model/nozzle_diameter rather than parsing/guessing
+// from the display name. Profiles with no resolvable printer_model (e.g.
+// internal template fragments) are skipped.
 func discoverRealPrinters(machineSet resolver.Set) []printerOption {
 	var out []printerOption
 	for name, leaf := range machineSet {
+		from, _ := leaf.Fields["from"].(string)
+		if from != "User" {
+			continue
+		}
 		effective, _, err := resolver.Resolve(machineSet, leaf)
 		if err != nil {
 			continue
@@ -363,6 +373,7 @@ var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Parse(
   {{if eq (print .Deployment.State) "INSTALLED_LOCALLY"}}
   <form method="post" action="/deployments/{{.Deployment.ID}}/check" class="border-t border-zinc-100 pt-4">
     <p class="text-sm text-zinc-500 mb-3">Reopen Bambu Studio, select the profile, and Save it once &mdash; the confirmed trigger (reopening/selecting/slicing alone don't bump the metadata Studio uses).</p>
+    {{if .JustChecked}}<p class="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 mb-3">Checked just now &mdash; Bambu Studio hasn't picked it up yet. Save it in Studio, then check again.</p>{{end}}
     <button type="submit" class="px-4 py-2 rounded-lg border border-zinc-300 text-sm font-medium hover:bg-zinc-50 transition">Check recognition</button>
   </form>
   {{end}}
@@ -376,7 +387,10 @@ func (s *Server) handleDeploymentDetail(w http.ResponseWriter, r *http.Request) 
 		httpError(w, err)
 		return
 	}
-	data := struct{ Deployment any }{Deployment: dep}
+	data := struct {
+		Deployment  any
+		JustChecked bool
+	}{Deployment: dep, JustChecked: r.URL.Query().Get("checked") == "1"}
 	renderPage(w, deploymentDetailTmpl, data, "Deployment", "Deployment "+id, "", "", "")
 }
 
@@ -422,12 +436,15 @@ func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if _, err := s.Svc.CheckRecognition(ctx, id, targetProfile, publishedPath, reconcile.InfoFields{}, afterInfo); err != nil {
-		// Still redirect: the deployment was saved with whatever state it
-		// reached (e.g. SEMANTIC_MISMATCH is a real, informative outcome,
-		// not a request failure) — surfacing it on the detail page is more
-		// useful than a raw 500.
+		// Still redirect rather than 500: the deployment was saved with
+		// whatever state it reached, and that's visible in its history
+		// (e.g. SEMANTIC_MISMATCH is a real, informative outcome, not a
+		// request failure). Logged so a genuine internal error (I/O, JSON)
+		// isn't completely invisible, since the page itself won't show one
+		// beyond "still INSTALLED_LOCALLY".
+		fmt.Fprintf(os.Stderr, "check-recognition %s: %v\n", id, err)
 	}
-	http.Redirect(w, r, "/deployments/"+id, http.StatusSeeOther)
+	http.Redirect(w, r, "/deployments/"+id+"?checked=1", http.StatusSeeOther)
 }
 
 var backupsTmpl = template.Must(template.New("backups").Parse(`
