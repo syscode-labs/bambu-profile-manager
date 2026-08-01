@@ -48,20 +48,25 @@ func shortPrinterToken(printerModel, nozzleDiameter string) string {
 // HF"), Token is the short code passed to rebind.FindCandidateParents.
 type printerOption struct{ Name, Token string }
 
-// discoverRealPrinters lists only the user's OWN configured printers as
-// selectable options — machineSet must include the full user+system tree so
-// inheritance resolves, but every Bambu-made model exists as a system
-// template regardless of what the user actually owns (found live: a
-// profile copied to "X1" published fine but never appeared in Studio,
-// because the user has no X1 — only X1 Carbon — configured; system
-// profiles have `"from": "system"`, the user's own have `"from": "User"`,
-// see findings.md). Resolves each candidate's inheritance chain for its
-// authoritative printer_model/nozzle_diameter rather than parsing/guessing
-// from the display name. Profiles with no resolvable printer_model (e.g.
-// internal template fragments) are skipped.
+// discoverRealPrinters lists selectable printer options limited to MODELS
+// the user actually owns — machineSet must include the full user+system
+// tree so inheritance resolves, but every Bambu-made model exists as a
+// system template regardless of what the user owns (found live: a profile
+// copied to "X1" published fine but never appeared in Studio, because the
+// user has no X1 — only X1 Carbon — configured).
+//
+// Ownership is at the MODEL level, not the exact nozzle profile: owning an
+// X1 Carbon in any nozzle size means every nozzle size Bambu offers for an
+// X1 Carbon is a real, selectable option in Studio too — Studio's printer
+// picker isn't gated per nozzle the way filament profiles are gated on
+// having a "User" copy (corrected after an earlier, too-strict pass
+// required a "User" entry for every single nozzle size). System profiles
+// have `"from": "system"`, the user's own have `"from": "User"`, confirmed
+// on real files (findings.md) — used only to establish which MODELS are
+// owned; every matching nozzle variant (user or system) is then included.
 func discoverRealPrinters(machineSet resolver.Set) []printerOption {
-	var out []printerOption
-	for name, leaf := range machineSet {
+	ownedModels := map[string]bool{}
+	for _, leaf := range machineSet {
 		from, _ := leaf.Fields["from"].(string)
 		if from != "User" {
 			continue
@@ -70,8 +75,19 @@ func discoverRealPrinters(machineSet resolver.Set) []printerOption {
 		if err != nil {
 			continue
 		}
+		if model, _ := effective.Fields["printer_model"].(string); model != "" {
+			ownedModels[model] = true
+		}
+	}
+
+	var out []printerOption
+	for name, leaf := range machineSet {
+		effective, _, err := resolver.Resolve(machineSet, leaf)
+		if err != nil {
+			continue
+		}
 		model, _ := effective.Fields["printer_model"].(string)
-		if model == "" {
+		if model == "" || !ownedModels[model] {
 			continue
 		}
 		nozzle := ""

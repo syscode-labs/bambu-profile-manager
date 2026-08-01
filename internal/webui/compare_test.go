@@ -206,3 +206,42 @@ func TestDiscoverRealPrintersExcludesSystemTemplatesUserDoesNotOwn(t *testing.T)
 		}
 	}
 }
+
+// TestDiscoverRealPrintersIncludesUnownedNozzleSizeForOwnedModel guards
+// against the fix above being too strict: printer ownership is corrected
+// after the user pushed back — owning an X1 Carbon in one nozzle size (a
+// "User" 0.4 profile) must make every nozzle Bambu offers for X1 Carbon
+// selectable, including a 0.2 stock system profile the user never
+// customized. Studio's printer picker isn't gated per exact nozzle the way
+// filament profiles are.
+func TestDiscoverRealPrintersIncludesUnownedNozzleSizeForOwnedModel(t *testing.T) {
+	owned04 := &domain.RawProfile{
+		Name: "Bambu Lab X1 Carbon 0.4 nozzle - Obsidian HF",
+		Fields: map[string]any{
+			"name": "Bambu Lab X1 Carbon 0.4 nozzle - Obsidian HF", "printer_model": "Bambu Lab X1 Carbon",
+			"nozzle_diameter": []any{"0.4"}, "from": "User",
+		},
+	}
+	stock02 := &domain.RawProfile{
+		Name: "Bambu Lab X1 Carbon 0.2 nozzle",
+		Fields: map[string]any{
+			"name": "Bambu Lab X1 Carbon 0.2 nozzle", "printer_model": "Bambu Lab X1 Carbon",
+			"nozzle_diameter": []any{"0.2"}, "from": "system",
+		},
+	}
+	set := resolver.Set{owned04.Name: owned04, stock02.Name: stock02}
+
+	printers := discoverRealPrinters(set)
+	var foundStock02 bool
+	for _, p := range printers {
+		if p.Name == stock02.Name {
+			foundStock02 = true
+			if p.Token != "X1C 0.2" {
+				t.Fatalf("Token = %q, want %q", p.Token, "X1C 0.2")
+			}
+		}
+	}
+	if !foundStock02 {
+		t.Fatalf("discoverRealPrinters excluded the stock 0.2 nozzle for an owned model: %+v", printers)
+	}
+}
