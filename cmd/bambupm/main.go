@@ -34,6 +34,10 @@ func main() {
 		cmdResolve(os.Args[2:])
 	case "serve":
 		cmdServe(os.Args[2:])
+	case "publish":
+		cmdPublish(os.Args[2:])
+	case "check-recognition":
+		cmdCheckRecognition(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -56,9 +60,18 @@ Usage:
       Start the local web UI (list/import/view profiles). --db defaults to
       bambupm.db in the current directory.
 
-Rebind/publish are available via internal/service for now — no CLI surface
-yet (needs the user present for the Studio-closed precondition, decisions.md
-#4, so it's deliberately not a one-command CLI action).`)
+  bambupm publish --db <path> --user-dir <dir> --system-dir <dir> [...]
+                  --name "<profile name>" --target <candidate> [...]
+                  [--target-name "<new profile name>"]
+      Rebind a profile and publish it. Bambu Studio must be closed. Stops
+      at INSTALLED_LOCALLY (recognition can't happen while Studio is
+      closed) — reopen Studio, then run check-recognition.
+
+  bambupm check-recognition --db <path> --deployment-id <id> --user-dir <dir>
+      Resume a deployment sitting at INSTALLED_LOCALLY: read the profile's
+      current .info file and check whether Bambu Studio picked it up
+      (decisions.md #5's RewriteDetector — flagged unverified, this is how
+      you verify it empirically).`)
 }
 
 func cmdScan(args []string) {
@@ -86,23 +99,10 @@ func cmdResolve(args []string) {
 		os.Exit(2)
 	}
 
-	set := resolver.Set{}
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "resolve: read %s: %v\n", dir, err)
-			os.Exit(1)
-		}
-		for _, e := range entries {
-			if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-				continue
-			}
-			p, err := parser.Load(filepath.Join(dir, e.Name()))
-			if err != nil {
-				continue
-			}
-			set[p.Name] = p
-		}
+	set, err := loadDirs(dirs)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "resolve:", err)
+		os.Exit(1)
 	}
 
 	leaf, ok := set[name]
@@ -147,6 +147,29 @@ func cmdServe(args []string) {
 		fmt.Fprintln(os.Stderr, "serve:", err)
 		os.Exit(1)
 	}
+}
+
+// loadDirs scans every *.json file directly under each dir (non-recursive,
+// matching bambuadapter.Discover) into one resolver.Set keyed by name.
+func loadDirs(dirs []string) (resolver.Set, error) {
+	set := resolver.Set{}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", dir, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+				continue
+			}
+			p, err := parser.Load(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			set[p.Name] = p
+		}
+	}
+	return set, nil
 }
 
 func flagValue(args []string, name string) string {

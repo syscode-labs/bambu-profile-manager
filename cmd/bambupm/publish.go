@@ -1,0 +1,194 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/google/uuid"
+
+	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
+	"github.com/syscod3/bambu-profile-manager/internal/domain"
+	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
+	"github.com/syscod3/bambu-profile-manager/internal/service"
+	"github.com/syscod3/bambu-profile-manager/internal/storage"
+	"github.com/syscod3/bambu-profile-manager/internal/storage/sqlite"
+)
+
+func newUUID() (string, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
+}
+
+func cmdPublish(args []string) {
+	dbPath := flagValue(args, "--db")
+	if dbPath == "" {
+		dbPath = "bambupm.db"
+	}
+	userDir := flagValue(args, "--user-dir")
+	systemDirs := flagValues(args, "--system-dir")
+	name := flagValue(args, "--name")
+	candidates := flagValues(args, "--target")
+	targetName := flagValue(args, "--target-name")
+	if userDir == "" || name == "" || len(candidates) == 0 {
+		fmt.Fprintln(os.Stderr, "publish: --user-dir, --name, and at least one --target are required")
+		os.Exit(2)
+	}
+
+	set, err := loadDirs(append([]string{userDir}, systemDirs...))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "publish:", err)
+		os.Exit(1)
+	}
+	leaf, ok := set[name]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "publish: %q not found under given directories\n", name)
+		os.Exit(1)
+	}
+
+	repo, err := sqlite.Open(dbPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "publish:", err)
+		os.Exit(1)
+	}
+	defer repo.Close()
+
+	ctx := context.Background()
+	profile, err := repo.Profiles().GetByName(ctx, name)
+	if errors.Is(err, storage.ErrNotFound) {
+		profile, err = repo.Profiles().Create(ctx, name)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "publish: profile:", err)
+		os.Exit(1)
+	}
+
+	svc := &service.Service{
+		Repo:     repo,
+		Adapter:  &bambuadapter.LocalAdapter{Dir: userDir}, // IsStudioRunning nil -> real pgrep check
+		Detector: reconcile.RewriteDetector{},               // the detector decisions.md #5 flagged unverified
+		NewID:    newUUID,
+	}
+
+	result, err := svc.RebindAndPublish(ctx, set, set, leaf, candidates, profile.ID, targetName,
+		reconcile.InfoFields{}, reconcile.InfoFields{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "publish:", err)
+	}
+	if result == nil || result.Deployment == nil {
+		os.Exit(1)
+	}
+
+	fmt.Printf("deployment: %s\n", result.Deployment.ID)
+	fmt.Printf("state:      %s\n", result.Deployment.State)
+	if result.Rebind != nil {
+		fmt.Printf("strategy:   %s\n", result.Rebind.Strategy)
+		if result.Rebind.Strategy == "map_to_target_parent" {
+			fmt.Printf("parent:     %s\n", result.Rebind.MatchedCandidate)
+		}
+	}
+	if result.PublishedPath != "" {
+		fmt.Printf("published:  %s\n", result.PublishedPath)
+	}
+	for _, tr := range result.Deployment.History {
+		fmt.Printf("  %s -> %s (%s)\n", tr.From, tr.To, tr.Reason)
+	}
+
+	if result.Deployment.State == reconcile.StateInstalledLocally {
+		fmt.Fprintf(os.Stderr, "\nNow reopen Bambu Studio, confirm the profile appears, then run:\n"+
+			"  bambupm check-recognition --db %s --deployment-id %s --user-dir %s\n", dbPath, result.Deployment.ID, userDir)
+	}
+	if err != nil {
+		os.Exit(1)
+	}
+}
+
+func cmdCheckRecognition(args []string) {
+	dbPath := flagValue(args, "--db")
+	if dbPath == "" {
+		dbPath = "bambupm.db"
+	}
+	deploymentID := flagValue(args, "--deployment-id")
+	userDir := flagValue(args, "--user-dir")
+	if deploymentID == "" || userDir == "" {
+		fmt.Fprintln(os.Stderr, "check-recognition: --deployment-id and --user-dir are required")
+		os.Exit(2)
+	}
+
+	repo, err := sqlite.Open(dbPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "check-recognition:", err)
+		os.Exit(1)
+	}
+	defer repo.Close()
+	ctx := context.Background()
+
+	dep, err := repo.Deployments().Get(ctx, deploymentID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "check-recognition: load deployment:", err)
+		os.Exit(1)
+	}
+	profile, err := repo.Profiles().Get(ctx, dep.ProfileID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "check-recognition: load profile:", err)
+		os.Exit(1)
+	}
+	versions, err := repo.Versions().List(ctx, dep.ProfileID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "check-recognition: load versions:", err)
+		os.Exit(1)
+	}
+	var resolvedJSON []byte
+	for _, v := range versions {
+		if v.Revision == dep.Revision {
+			resolvedJSON = v.ResolvedJSON
+			break
+		}
+	}
+	if resolvedJSON == nil {
+		fmt.Fprintf(os.Stderr, "check-recognition: no stored version for revision %d\n", dep.Revision)
+		os.Exit(1)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(resolvedJSON, &fields); err != nil {
+		fmt.Fprintln(os.Stderr, "check-recognition: decode stored version:", err)
+		os.Exit(1)
+	}
+	targetProfile := &domain.RawProfile{Name: profile.Name, Fields: fields}
+	publishedPath := filepath.Join(userDir, profile.Name+".json")
+	infoPath := filepath.Join(userDir, profile.Name+".info")
+
+	afterInfo := reconcile.InfoFields{}
+	if b, err := os.ReadFile(infoPath); err == nil {
+		afterInfo = reconcile.ParseInfo(b)
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, "check-recognition: read .info:", err)
+		os.Exit(1)
+	}
+
+	svc := &service.Service{Repo: repo, Adapter: &bambuadapter.LocalAdapter{Dir: userDir}, Detector: reconcile.RewriteDetector{}}
+	result, err := svc.CheckRecognition(ctx, deploymentID, targetProfile, publishedPath, reconcile.InfoFields{}, afterInfo)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "check-recognition:", err)
+	}
+	if result == nil || result.Deployment == nil {
+		os.Exit(1)
+	}
+
+	fmt.Printf("state: %s\n", result.Deployment.State)
+	for _, tr := range result.Deployment.History {
+		fmt.Printf("  %s -> %s (%s)\n", tr.From, tr.To, tr.Reason)
+	}
+	if result.Deployment.State == reconcile.StateInstalledLocally {
+		fmt.Fprintln(os.Stderr, "\nNot recognized yet (no .info change detected). Re-run this command after Studio has had a chance to sync.")
+	}
+	if err != nil {
+		os.Exit(1)
+	}
+}
