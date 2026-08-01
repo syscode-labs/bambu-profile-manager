@@ -50,6 +50,10 @@ var shellTmpl = template.Must(template.New("shell").Parse(`<!doctype html>
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/></svg>
       Copy to Printer
     </a>
+    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "compare"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800 hover:text-white{{end}}" href="/compare">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l7 4-7 4M4 4v16M20 4v16"/></svg>
+      Compare
+    </a>
     <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "backups"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800 hover:text-white{{end}}" href="/backups">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
       Backups

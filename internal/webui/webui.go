@@ -221,7 +221,10 @@ var liveProfileTmpl = template.Must(template.New("liveProfile").Parse(`
     </div>
   </details>
 </section>
-<a href="/copy" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Copy to another printer &rarr;</a>
+<div class="flex items-center gap-4">
+  <a href="/copy" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Copy to another printer &rarr;</a>
+  <a href="/compare?item=live:{{.Name}}" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Compare with another profile &rarr;</a>
+</div>
 `))
 
 // resolveLiveFields scans the live Bambu Studio directories and resolves

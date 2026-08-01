@@ -474,6 +474,39 @@ func TestProfilePreviewFragmentNotFound(t *testing.T) {
 	}
 }
 
+// TestCompareLiveUntrackedProfiles covers a real gap: nearly every profile
+// in a real Bambu Studio library is untracked (no ProfileVersion row — see
+// TestIndexShowsUntrackedLiveProfiles for the same issue on the landing
+// page), so /compare must offer live profiles too, not just db revisions.
+func TestCompareLiveUntrackedProfiles(t *testing.T) {
+	ts, _, _ := newTestServerWithLiveDir(t)
+
+	formResp, err := http.Get(ts.URL + "/compare")
+	if err != nil {
+		t.Fatalf("GET /compare: %v", err)
+	}
+	defer formResp.Body.Close()
+	formBody, _ := io.ReadAll(formResp.Body)
+	if !strings.Contains(string(formBody), "live:Syscode - AmazonBasics ABS 0.6") {
+		t.Fatalf("compare form missing a live profile option: %s", formBody)
+	}
+
+	resp, err := http.Get(ts.URL + "/compare?item=" + url.QueryEscape("live:Syscode - AmazonBasics ABS 0.6") +
+		"&item=" + url.QueryEscape("live:Bambu ABS @BBL X1C"))
+	if err != nil {
+		t.Fatalf("GET /compare?item=live:...: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "(live)") {
+		t.Fatalf("compare result missing the (live) marker: %s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Nozzle Temperature") {
+		t.Fatalf("compare result missing settings for live profiles: %s", bodyStr)
+	}
+}
+
 func TestIndexShowsUntrackedLiveProfiles(t *testing.T) {
 	ts, _, _ := newTestServerWithLiveDir(t)
 

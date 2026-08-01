@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/syscod3/bambu-profile-manager/internal/resolver"
 )
 
 // summaryField is one recognizable setting shown on the profile detail
@@ -219,6 +221,12 @@ func compareItems(itemsFields []map[string]any) []compareGroup {
 
 type compareOption struct{ Value, Label string }
 
+// compareOptions lists both bambupm-tracked profile revisions (frozen
+// snapshots with a stored ProfileVersion) and live profiles read straight
+// off --user-dir/--system-dir. Most of a real Bambu Studio library is never
+// tracked (only profiles that went through Import/Copy get a ProfileVersion
+// row — see the same gap fixed for the landing page), so without the live
+// half this dropdown would be empty for nearly everyone.
 func (s *Server) compareOptions(ctx context.Context) ([]compareOption, error) {
 	profiles, err := s.Svc.Repo.Profiles().List(ctx)
 	if err != nil {
@@ -237,12 +245,28 @@ func (s *Server) compareOptions(ctx context.Context) ([]compareOption, error) {
 			})
 		}
 	}
+
+	if s.UserDir != "" {
+		set, err := resolver.LoadDirs(append([]string{s.UserDir}, s.SystemDirs...))
+		if err != nil {
+			return nil, err
+		}
+		names := make([]string, 0, len(set))
+		for name := range set {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			opts = append(opts, compareOption{Value: "live:" + name, Label: name + " (live)"})
+		}
+	}
 	return opts, nil
 }
 
 type comparedItem struct {
 	ProfileName string
 	Revision    int
+	IsLive      bool
 }
 
 var comparePageTmpl = template.Must(template.New("comparePage").Parse(`
@@ -280,7 +304,7 @@ var comparePageTmpl = template.Must(template.New("comparePage").Parse(`
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-5">
   <div class="grid {{if eq (len .Selected) 2}}grid-cols-[180px_1fr_1fr]{{else}}grid-cols-[180px_1fr_1fr_1fr]{{end}} gap-3">
     <div></div>
-    {{range .Selected}}<div class="text-xs font-semibold text-zinc-700">{{.ProfileName}} <span class="text-zinc-400 font-normal">rev {{.Revision}}</span></div>{{end}}
+    {{range .Selected}}<div class="text-xs font-semibold text-zinc-700">{{.ProfileName}} <span class="text-zinc-400 font-normal">{{if .IsLive}}(live){{else}}rev {{.Revision}}{{end}}</span></div>{{end}}
   </div>
   {{range .Groups}}
   <div>
@@ -325,6 +349,16 @@ func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
 	var selected []comparedItem
 	var fieldsList []map[string]any
 	for _, it := range itemKeys {
+		if name, ok := strings.CutPrefix(it, "live:"); ok {
+			fields, err := s.resolveLiveFields(name)
+			if err != nil {
+				continue
+			}
+			selected = append(selected, comparedItem{ProfileName: name, IsLive: true})
+			fieldsList = append(fieldsList, fields)
+			continue
+		}
+
 		profileID, revStr, ok := strings.Cut(it, ":")
 		if !ok {
 			continue
@@ -368,5 +402,5 @@ func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
 		Selected []comparedItem
 		Groups   []compareGroup
 	}{Options: opts, Items: items, Selected: selected, Groups: groups}
-	renderPage(w, comparePageTmpl, data, "Compare", "Compare profiles", "Pick up to 3 profile revisions to compare side by side.", "profiles", "")
+	renderPage(w, comparePageTmpl, data, "Compare", "Compare profiles", "Pick up to 3 profile revisions to compare side by side.", "compare", "")
 }
