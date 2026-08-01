@@ -18,8 +18,9 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 - [x] Exit gate: X1C 0.4 → P1S 0.4 fixture passes (real profiles, `internal/rebind/rebind_test.go`); target resolves independently
 
 ## Phase 3 — Bambu round trip (highest priority)
-- [ ] Agent F: Bambu adapter (discover/validate/stage/publish/observe/verify), atomic publish + backups, reconciliation state machine, rollback
-- Exit gate: import → rebind → publish → Studio recognition → sync/reload → post-sync re-read → semantic equality. Do not begin broad UI work before this passes.
+- [x] Agent F (partial): Bambu adapter (discover/validate/stage/publish/observe/verify), atomic publish + backups — `internal/bambuadapter`. Publish refuses while Studio looks running (decisions.md #4, best-effort `pgrep` check, pluggable). All operations take an explicit root dir; tests use `t.TempDir()` only — **never write-tests against the real local BambuStudio directory**, since this is unattended and touches shared live state.
+- [ ] Agent F (remaining): reconciliation state machine (design.md §16), `OBSERVED_BY_STUDIO` detector (decisions.md #5, flagged unverified), rollback
+- Exit gate: import → rebind → publish → Studio recognition → sync/reload → post-sync re-read → semantic equality. Do not begin broad UI work before this passes. **Real end-to-end publish against the live Bambu Studio directory needs the user present (Studio must be closed/reopened) — cannot be completed unattended.**
 
 ## Phase 4 — UI polish and operational support
 - [ ] Agent G: templ/HTMX UI (profile browser, detail, dependency graph, rebind, deployments, rollback) — plain REST + page reloads, built starting in Phase 1, not deferred (see decisions.md #7)
