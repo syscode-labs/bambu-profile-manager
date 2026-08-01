@@ -280,7 +280,7 @@ func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, kind profil
 		Kind  string
 		Items []indexProfile
 	}{Kind: kind.Key, Items: items}
-	renderPage(w, indexTmpl, data, "Profiles", "Bambu Profile Manager", "", "profiles", "")
+	renderPage(w, indexTmpl, data, "Profiles", "Bambu Profile Manager", "", "profiles", "", false)
 }
 
 var liveProfileTmpl = template.Must(template.New("liveProfile").Parse(`
@@ -380,7 +380,7 @@ func (s *Server) renderLiveProfile(w http.ResponseWriter, r *http.Request, kind 
 		Color   string
 		Groups  []fieldGroup
 	}{Kind: kind.Key, Name: name, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
-	renderPage(w, liveProfileTmpl, data, name, name, "", "profiles", "")
+	renderPage(w, liveProfileTmpl, data, name, name, "", "profiles", "", false)
 }
 
 var previewFragmentTmpl = template.Must(template.New("previewFragment").Parse(`
@@ -524,7 +524,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		Color   string
 		Groups  []fieldGroup
 	}{Profile: p, Latest: latest, All: all, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
-	renderPage(w, profileTmpl, data, p.Name, p.Name, "", "profiles", "")
+	renderPage(w, profileTmpl, data, p.Name, p.Name, "", "profiles", "", false)
 }
 
 var deploymentsTmpl = template.Must(template.New("deployments").Funcs(statusFuncs).Parse(`
@@ -566,7 +566,7 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		Profile     any
 		Deployments any
 	}{Profile: p, Deployments: deployments}
-	renderPage(w, deploymentsTmpl, data, "Deployments", "Deployment history: "+p.Name, "", "profiles", "")
+	renderPage(w, deploymentsTmpl, data, "Deployments", "Deployment history: "+p.Name, "", "profiles", "", false)
 }
 
 var importFormTmpl = template.Must(template.New("import").Parse(`
@@ -586,7 +586,7 @@ var importFormTmpl = template.Must(template.New("import").Parse(`
 `))
 
 func (s *Server) handleImportForm(w http.ResponseWriter, r *http.Request) {
-	renderPage(w, importFormTmpl, nil, "Import", "Import a bundle", "Bring a .profilepack exported elsewhere into this library.", "import", "")
+	renderPage(w, importFormTmpl, nil, "Import", "Import a bundle", "Bring a .profilepack exported elsewhere into this library.", "import", "", false)
 }
 
 func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {

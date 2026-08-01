@@ -68,11 +68,12 @@ var shellTmpl = template.Must(template.New("shell").Parse(`<!doctype html>
     {{if .HeaderSubtitle}}<p class="text-sm text-zinc-500">{{.HeaderSubtitle}}</p>{{end}}
   </header>
   <div class="px-8 py-6 max-w-3xl space-y-6">
-    <div id="studio-warning">{{.Warning}}</div>
+    {{if .WatchStudio}}<div id="studio-warning">{{.Warning}}</div>{{end}}
     {{.Content}}
   </div>
 </main>
 
+{{if .WatchStudio}}
 <script>
 (function() {
   var el = document.getElementById('studio-warning');
@@ -86,6 +87,7 @@ var shellTmpl = template.Must(template.New("shell").Parse(`<!doctype html>
   setInterval(poll, 5000);
 })();
 </script>
+{{end}}
 </body>
 </html>`))
 
@@ -93,7 +95,18 @@ var shellTmpl = template.Must(template.New("shell").Parse(`<!doctype html>
 // shellTmpl (sidebar/header/warning banner). contentTmpl gets normal
 // html/template escaping against data; the shell only ever receives
 // already-escaped HTML plus a handful of Go-controlled strings.
-func renderPage(w http.ResponseWriter, contentTmpl *template.Template, data any, title, headerTitle, headerSubtitle, active string, warning template.HTML) {
+//
+// watchStudio gates both the initial banner slot AND the client-side
+// live-poll script (see shell's <script>): pages where "Bambu Studio is
+// running" is actually actionable information (copy, backups — publishing
+// needs it closed) pass true; everywhere else passes false, most
+// importantly the deployment-detail page, which tells the user to *reopen*
+// Studio as its own next step — showing a "Studio is running, close it"
+// warning there would directly contradict that instruction (real user
+// report: the live-poll banner reappeared there a few seconds after load
+// even though this handler never asked for one, because the poller used to
+// run unconditionally on every page).
+func renderPage(w http.ResponseWriter, contentTmpl *template.Template, data any, title, headerTitle, headerSubtitle, active string, warning template.HTML, watchStudio bool) {
 	var contentBuf bytes.Buffer
 	if err := contentTmpl.Execute(&contentBuf, data); err != nil {
 		http.Error(w, "render: "+err.Error(), http.StatusInternalServerError)
@@ -107,9 +120,10 @@ func renderPage(w http.ResponseWriter, contentTmpl *template.Template, data any,
 		Active         string
 		Warning        template.HTML
 		Content        template.HTML
+		WatchStudio    bool
 	}{
 		Title: title, HeaderTitle: headerTitle, HeaderSubtitle: headerSubtitle,
-		Active: active, Warning: warning, Content: template.HTML(contentBuf.String()),
+		Active: active, Warning: warning, Content: template.HTML(contentBuf.String()), WatchStudio: watchStudio,
 	}
 
 	var buf bytes.Buffer

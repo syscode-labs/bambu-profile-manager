@@ -282,7 +282,7 @@ func (s *Server) renderCopyForm(w http.ResponseWriter, r *http.Request, kind pro
 	if kind.Key == "process" {
 		title = "Copy a process (print) profile to another printer"
 	}
-	renderPage(w, copyFormTmpl, data, "Copy", title, "Rebind without touching dependency chains yourself.", "copy", studioWarning(kind.Svc))
+	renderPage(w, copyFormTmpl, data, "Copy", title, "Rebind without touching dependency chains yourself.", "copy", studioWarning(kind.Svc), true)
 }
 
 var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
@@ -523,7 +523,7 @@ func (s *Server) renderCopyPreview(w http.ResponseWriter, r *http.Request, kind 
 		Kind: kind.Key, Name: name, PrinterToken: token, PrinterCanonical: canonical,
 		AlreadyCompatible: alreadyCompatible, Candidates: candidates, FamilyCandidates: familyCandidates,
 	}
-	renderPage(w, copyPreviewTmpl, data, "Copy preview", "Copy preview: "+name, "&rarr; "+token, "copy", studioWarning(kind.Svc))
+	renderPage(w, copyPreviewTmpl, data, "Copy preview", "Copy preview: "+name, "&rarr; "+token, "copy", studioWarning(kind.Svc), true)
 }
 
 var copyResultTmpl = template.Must(template.New("copyResult").Funcs(statusFuncs).Parse(`
@@ -636,7 +636,8 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 		shellData := struct {
 			Title, HeaderTitle, HeaderSubtitle, Active string
 			Warning, Content                           template.HTML
-		}{Title: "Publish blocked", HeaderTitle: "Publish blocked", Active: "copy", Content: template.HTML(contentBuf.String())}
+			WatchStudio                                bool
+		}{Title: "Publish blocked", HeaderTitle: "Publish blocked", Active: "copy", Content: template.HTML(contentBuf.String()), WatchStudio: true}
 		var buf bytes.Buffer
 		shellTmpl.Execute(&buf, shellData)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -659,7 +660,7 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 		Kind: kind.Key, Deployment: result.Deployment, Parent: parent, Name: confirmName,
 		Snapshot: result.Snapshot, AddedCompatibility: addCompatiblePrinter,
 	}
-	renderPage(w, copyResultTmpl, data, "Copy result", "Copy result", "", "copy", "")
+	renderPage(w, copyResultTmpl, data, "Copy result", "Copy result", "", "copy", "", false)
 }
 
 var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Funcs(statusFuncs).Parse(`
@@ -716,7 +717,7 @@ func (s *Server) renderDeploymentDetail(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	data := struct{ Deployment any }{Deployment: dep}
-	renderPage(w, deploymentDetailTmpl, data, "Deployment", "Deployment "+id, "", "", "")
+	renderPage(w, deploymentDetailTmpl, data, "Deployment", "Deployment "+id, "", "", "", false)
 }
 
 // recheckDeployment re-derives a deployment's published path/target profile
@@ -867,7 +868,7 @@ func (s *Server) handleBackupsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := struct{ List any }{List: list}
-	renderPage(w, backupsTmpl, data, "Backups", "Backups", "Point-in-time snapshots taken automatically before every publish.", "backups", studioWarning(s.Svc))
+	renderPage(w, backupsTmpl, data, "Backups", "Backups", "Point-in-time snapshots taken automatically before every publish.", "backups", studioWarning(s.Svc), true)
 }
 
 func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {

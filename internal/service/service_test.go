@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
+	"github.com/syscod3/bambu-profile-manager/internal/domain"
 	"github.com/syscod3/bambu-profile-manager/internal/parser"
 	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
 	"github.com/syscod3/bambu-profile-manager/internal/resolver"
@@ -133,6 +134,130 @@ func TestAcceptanceFlowImportRebindPublishVerify(t *testing.T) {
 	}
 	if obs.Fields["inherits"] != "Bambu ABS @BBL P1S 0.4 nozzle" {
 		t.Fatalf("published profile inherits=%v, want the real (non-naive) P1S parent", obs.Fields["inherits"])
+	}
+}
+
+// TestRebindAndPublishRenameUpdatesFilamentSettingsID is a real bug found
+// live: renaming a copy (via targetName) updated the "name" field but left
+// filament_settings_id/print_settings_id pointing at the old name, which
+// Bambu Studio (findings.md: these fields echo the profile's own name)
+// likely uses to display/identify the profile — a stale one could easily
+// explain "the copy doesn't show up in Studio" even though the file exists
+// on disk under the new name.
+func TestRebindAndPublishRenameUpdatesFilamentSettingsID(t *testing.T) {
+	ctx := context.Background()
+	fixtureBase := filepath.Join("..", "..", "testdata", "fixtures", "x1c-to-p1s")
+	sourceSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source")) {
+		sourceSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		sourceSet[k] = v
+	}
+	targetSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "target-system")) {
+		targetSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		if _, ok := targetSet[k]; !ok {
+			targetSet[k] = v
+		}
+	}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	bambuDir := t.TempDir()
+	svc := &service.Service{
+		Repo:     repo,
+		Adapter:  &bambuadapter.LocalAdapter{Dir: bambuDir, IsStudioRunning: func() (bool, error) { return false, nil }},
+		Detector: reconcile.ManualDetector{Confirmed: false},
+		NewID:    newID,
+	}
+
+	const leafName = "Syscode - AmazonBasics ABS 0.6"
+	leaf := sourceSet[leafName]
+	profile, err := repo.Profiles().Create(ctx, leafName)
+	if err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+
+	const newName = "Renamed Copy @P1S"
+	if _, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, newName, "",
+		reconcile.InfoFields{}, reconcile.InfoFields{}); err != nil {
+		t.Fatalf("RebindAndPublish: %v", err)
+	}
+
+	obs, err := svc.Adapter.Observe(ctx, filepath.Join(bambuDir, newName+".json"))
+	if err != nil {
+		t.Fatalf("Observe published file: %v", err)
+	}
+	if obs.Fields["name"] != newName {
+		t.Fatalf("name = %v, want %q", obs.Fields["name"], newName)
+	}
+	fsid, _ := obs.Fields["filament_settings_id"].([]any)
+	if len(fsid) != 1 || fsid[0] != newName {
+		t.Fatalf("filament_settings_id = %v, want [%q] (stale value would explain a renamed copy not showing correctly in Studio)", fsid, newName)
+	}
+}
+
+// TestRebindAndPublishRenameUpdatesProcessSettingsID is the process-profile
+// analogue of the filament test above — print_settings_id is a plain
+// string on process profiles (confirmed against a real published file),
+// not a single-element array like filament's, so it needs its own check.
+func TestRebindAndPublishRenameUpdatesProcessSettingsID(t *testing.T) {
+	ctx := context.Background()
+	common := &domain.RawProfile{Name: "fdm_process_common", Fields: map[string]any{"name": "fdm_process_common"}}
+	root := &domain.RawProfile{Name: "fdm_process_single_0.20", Inherits: "fdm_process_common",
+		Fields: map[string]any{"name": "fdm_process_single_0.20", "inherits": "fdm_process_common"}}
+	parent := &domain.RawProfile{Name: "0.20mm Standard @BBL X1C", Inherits: "fdm_process_single_0.20", Fields: map[string]any{
+		"name": "0.20mm Standard @BBL X1C", "inherits": "fdm_process_single_0.20", "from": "system",
+		"compatible_printers": []any{"Bambu Lab X1 Carbon 0.4 nozzle"},
+	}}
+	leaf := &domain.RawProfile{Name: "My Custom @BBL X1C", Inherits: "0.20mm Standard @BBL X1C", Fields: map[string]any{
+		"name": "My Custom @BBL X1C", "inherits": "0.20mm Standard @BBL X1C", "from": "User",
+		"print_settings_id": "My Custom @BBL X1C",
+	}}
+	set := resolver.Set{}
+	for _, p := range []*domain.RawProfile{common, root, parent, leaf} {
+		set[p.Name] = p
+	}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	bambuDir := t.TempDir()
+	svc := &service.Service{
+		Repo:     repo,
+		Adapter:  &bambuadapter.LocalAdapter{Dir: bambuDir, IsStudioRunning: func() (bool, error) { return false, nil }},
+		Detector: reconcile.ManualDetector{Confirmed: false},
+		NewID:    newID,
+	}
+	profile, err := repo.Profiles().Create(ctx, leaf.Name)
+	if err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+
+	const newName = "My Custom @BBL X1C @X1C 0.2"
+	if _, err := svc.RebindAndPublish(ctx, set, set, leaf,
+		[]string{"0.20mm Standard @BBL X1C"}, profile.ID, newName, "",
+		reconcile.InfoFields{}, reconcile.InfoFields{}); err != nil {
+		t.Fatalf("RebindAndPublish: %v", err)
+	}
+
+	obs, err := svc.Adapter.Observe(ctx, filepath.Join(bambuDir, newName+".json"))
+	if err != nil {
+		t.Fatalf("Observe published file: %v", err)
+	}
+	if obs.Fields["print_settings_id"] != newName {
+		t.Fatalf("print_settings_id = %v, want %q (stale value found live — this is the bug that prompted this test)", obs.Fields["print_settings_id"], newName)
 	}
 }
 

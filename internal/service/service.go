@@ -224,11 +224,18 @@ func cloneWithName(fields map[string]any, name string) map[string]any {
 		out[k] = v
 	}
 	out["name"] = name
-	// filament_settings_id is observed (findings.md) to echo the profile's
-	// own name in a single-element array; keep it consistent with the
-	// renamed profile rather than pointing at the old name.
+	// filament_settings_id/print_settings_id are observed (findings.md) to
+	// echo the profile's own name — filament's as a single-element array,
+	// process's as a plain string (confirmed against real profiles of each
+	// kind) — keep whichever is present consistent with the renamed
+	// profile rather than left pointing at the old name. Real bug found
+	// live: a renamed process profile kept its old print_settings_id,
+	// since only the filament field was ever patched here.
 	if _, ok := out["filament_settings_id"]; ok {
 		out["filament_settings_id"] = []any{name}
+	}
+	if _, ok := out["print_settings_id"]; ok {
+		out["print_settings_id"] = name
 	}
 	return out
 }

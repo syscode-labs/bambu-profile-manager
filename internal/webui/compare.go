@@ -434,5 +434,5 @@ func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
 		Selected []comparedItem
 		Groups   []compareGroup
 	}{Options: opts, Items: items, Selected: selected, Groups: groups}
-	renderPage(w, comparePageTmpl, data, "Compare", "Compare profiles", "Pick up to 3 profile revisions to compare side by side.", "compare", "")
+	renderPage(w, comparePageTmpl, data, "Compare", "Compare profiles", "Pick up to 3 profile revisions to compare side by side.", "compare", "", false)
 }
