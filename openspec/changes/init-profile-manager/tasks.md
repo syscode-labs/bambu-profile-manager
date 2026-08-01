@@ -28,8 +28,9 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 - [x] Agent G (partial): plain server-rendered UI (profile list, detail with resolved JSON + revision history, import) — `internal/webui`, `bambupm serve`. Uses stdlib `html/template` + page reloads, not templ/HTMX (decisions.md #7 only asked for "plain REST + page reloads"; HTMX buys nothing without partial updates, so it's deferred with the rest of the deferred infra rather than added unused).
 - [ ] Agent G (remaining): dependency graph view, rebind page, deployments/rollback page — need the export-from-live-filesystem path and Deployment storage wired first
 - [ ] Agent H: Ristretto cache, revision-based keys, dependency-aware invalidation, singleflight, WebSocket hub, bounded queues — **deferred until real usage shows a need**, not built up front (decisions.md #7)
-- [ ] Agent I: multi-stage Dockerfile (amd64/arm64), compose example, CI (unit/integration/fuzz + Bambu compatibility job — CI job may be allowed-failure, but the app itself never claims verification it didn't do, decisions.md #6), release artifacts
-- Exit gate: `docker compose up` runs a working local instance against a bind-mounted Bambu directory
+- [x] Agent I (partial): multi-stage Dockerfile (`--platform=$BUILDPLATFORM` + `TARGETOS`/`TARGETARCH`, CGO-free via the pure-Go sqlite driver so amd64/arm64 cross-compile needs no C toolchain), `docker-compose.yml`, `README.md` with run instructions. Built and smoke-tested locally (image builds, container serves the web UI). **Known limitation documented in README**: the Studio-running publish guard (`pgrep`) can't see host processes from inside a container — publish must run natively on the host, not through Docker, until resolved.
+- [ ] Agent I (remaining): CI workflow, release artifacts
+- Exit gate: `docker compose up` runs a working local instance — proven (`docker build` + container smoke test passed); against a bind-mounted Bambu directory specifically is deferred until rebind/publish are exposed as CLI commands (see "Known limitations" in README)
 
 ## Deferred (post-v1)
 - PostgreSQL adapter, Google Sheets projection, OrcaSlicer support, experimental Bambu Cloud adapter, multi-instance deployment
