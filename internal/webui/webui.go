@@ -16,7 +16,6 @@ import (
 	"html/template"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/syscod3/bambu-profile-manager/internal/service"
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
@@ -37,8 +36,8 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /profiles/{id}", s.handleProfile)
-	mux.HandleFunc("GET /profiles/{id}/compare", s.handleCompare)
 	mux.HandleFunc("GET /profiles/{id}/deployments", s.handleDeployments)
+	mux.HandleFunc("GET /compare", s.handleComparePage)
 	mux.HandleFunc("GET /import", s.handleImportForm)
 	mux.HandleFunc("POST /import", s.handleImport)
 	mux.HandleFunc("GET /copy", s.handleCopyForm)
@@ -121,12 +120,17 @@ var profileTmpl = template.Must(template.New("profile").Parse(`
   </dl>
   {{end}}
   <p class="text-xs text-zinc-400">semantic hash <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Latest.SemanticHash}}</code> &middot; saved {{.Latest.CreatedAt.Format "Jan 2, 2006 15:04"}}</p>
-  <details class="text-sm">
-    <summary class="cursor-pointer text-zinc-500 hover:text-zinc-800">All settings ({{len .AllFields}})</summary>
-    <div class="mt-2 max-h-96 overflow-y-auto rounded-xl border border-zinc-100">
-      <table class="w-full text-xs">
-      {{range .AllFields}}<tr class="border-b border-zinc-50 last:border-0"><td class="px-3 py-1.5 text-zinc-500 whitespace-nowrap align-top">{{.Key}}</td><td class="px-3 py-1.5 font-mono break-all">{{.Value}}</td></tr>{{end}}
-      </table>
+  <details class="text-sm" open>
+    <summary class="cursor-pointer text-zinc-500 hover:text-zinc-800">All settings</summary>
+    <div class="mt-3 space-y-4">
+    {{range .Groups}}
+    <div>
+      <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">{{.Title}}</h4>
+      <div class="rounded-xl border border-zinc-100 divide-y divide-zinc-50">
+      {{range .Rows}}<div class="flex justify-between px-3 py-1.5 text-xs"><span class="text-zinc-500">{{.Key}}</span><span class="font-mono break-all text-right">{{.Value}}</span></div>{{end}}
+      </div>
+    </div>
+    {{end}}
     </div>
   </details>
 </section>
@@ -140,19 +144,7 @@ var profileTmpl = template.Must(template.New("profile").Parse(`
     <code class="text-xs text-zinc-400">{{.SemanticHash}}</code>
   </li>{{end}}
   </ul>
-  {{if gt (len .All) 1}}
-  <form method="get" action="/profiles/{{.Profile.ID}}/compare" class="flex items-end gap-3 border-t border-zinc-100 pt-4">
-    <label class="block text-xs">
-      <span class="text-zinc-500 block mb-1">Compare revision</span>
-      <select name="a" class="rounded-lg border border-zinc-300 px-2 py-1.5">{{range .All}}<option value="{{.Revision}}">{{.Revision}}</option>{{end}}</select>
-    </label>
-    <label class="block text-xs">
-      <span class="text-zinc-500 block mb-1">with</span>
-      <select name="b" class="rounded-lg border border-zinc-300 px-2 py-1.5">{{range .All}}<option value="{{.Revision}}">{{.Revision}}</option>{{end}}</select>
-    </label>
-    <button type="submit" class="px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 transition">Compare</button>
-  </form>
-  {{end}}
+  <a href="/compare?item={{.Profile.ID}}:{{.Latest.Revision}}" class="inline-block text-xs font-medium text-emerald-600 hover:text-emerald-700 border-t border-zinc-100 pt-3 block">Compare with another revision or profile &rarr;</a>
 </section>
 
 <a href="/profiles/{{.Profile.ID}}/deployments" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Deployment history &rarr;</a>
@@ -184,99 +176,14 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := struct {
-		Profile   any
-		Latest    any
-		All       any
-		Summary   []summaryField
-		Color     string
-		AllFields []kv
-	}{Profile: p, Latest: latest, All: all, Summary: profileSummary(fields), Color: profileColor(fields), AllFields: sortedFields(fields)}
+		Profile any
+		Latest  any
+		All     any
+		Summary []summaryField
+		Color   string
+		Groups  []fieldGroup
+	}{Profile: p, Latest: latest, All: all, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
 	renderPage(w, profileTmpl, data, p.Name, p.Name, "", "profiles", "")
-}
-
-var compareTmpl = template.Must(template.New("compare").Parse(`
-<p><a href="/profiles/{{.ProfileID}}" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; {{.ProfileName}}</a></p>
-<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
-  <p class="text-sm text-zinc-500">Comparing revision <strong>{{.RevA}}</strong> with <strong>{{.RevB}}</strong>.
-    {{.SameCount}} identical fields hidden.</p>
-  {{if not .Diffs}}
-  <p class="text-sm text-zinc-400">No differences &mdash; these revisions resolve to the same settings.</p>
-  {{else}}
-  <table class="w-full text-xs">
-    <thead><tr class="text-left text-zinc-400 border-b border-zinc-100">
-      <th class="py-2 pr-3 font-medium">Field</th>
-      <th class="py-2 pr-3 font-medium">Rev {{.RevA}}</th>
-      <th class="py-2 font-medium">Rev {{.RevB}}</th>
-    </tr></thead>
-    <tbody>
-    {{range .Diffs}}<tr class="border-b border-zinc-50">
-      <td class="py-2 pr-3 text-zinc-500 whitespace-nowrap align-top">{{.Key}}</td>
-      <td class="py-2 pr-3 font-mono bg-red-50 text-red-700 align-top break-all">{{.A}}</td>
-      <td class="py-2 font-mono bg-emerald-50 text-emerald-700 align-top break-all">{{.B}}</td>
-    </tr>{{end}}
-    </tbody>
-  </table>
-  {{end}}
-</section>
-`))
-
-func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	ctx := r.Context()
-
-	p, err := s.Svc.Repo.Profiles().Get(ctx, id)
-	if err != nil {
-		httpError(w, err)
-		return
-	}
-	revA, err := strconv.Atoi(r.URL.Query().Get("a"))
-	if err != nil {
-		http.Error(w, "compare: invalid revision a", http.StatusBadRequest)
-		return
-	}
-	revB, err := strconv.Atoi(r.URL.Query().Get("b"))
-	if err != nil {
-		http.Error(w, "compare: invalid revision b", http.StatusBadRequest)
-		return
-	}
-
-	versions, err := s.Svc.Repo.Versions().List(ctx, id)
-	if err != nil {
-		httpError(w, err)
-		return
-	}
-	var jsonA, jsonB []byte
-	for _, v := range versions {
-		if v.Revision == revA {
-			jsonA = v.ResolvedJSON
-		}
-		if v.Revision == revB {
-			jsonB = v.ResolvedJSON
-		}
-	}
-	if jsonA == nil || jsonB == nil {
-		http.Error(w, "compare: revision not found", http.StatusNotFound)
-		return
-	}
-	var fieldsA, fieldsB map[string]any
-	if err := json.Unmarshal(jsonA, &fieldsA); err != nil {
-		httpError(w, err)
-		return
-	}
-	if err := json.Unmarshal(jsonB, &fieldsB); err != nil {
-		httpError(w, err)
-		return
-	}
-	diffs, sameCount := diffFields(fieldsA, fieldsB)
-
-	data := struct {
-		ProfileID   string
-		ProfileName string
-		RevA, RevB  int
-		Diffs       []fieldDiff
-		SameCount   int
-	}{ProfileID: id, ProfileName: p.Name, RevA: revA, RevB: revB, Diffs: diffs, SameCount: sameCount}
-	renderPage(w, compareTmpl, data, "Compare", "Compare revisions: "+p.Name, "", "profiles", "")
 }
 
 var deploymentsTmpl = template.Must(template.New("deployments").Parse(`

@@ -318,9 +318,10 @@ func TestStudioRunningWarningShownAndPublishBlocked(t *testing.T) {
 	}
 }
 
-// TestCompareRevisions proves /profiles/{id}/compare surfaces a real diff
-// between two stored revisions and hides fields that didn't change.
-func TestCompareRevisions(t *testing.T) {
+// TestCompareAcrossThreeDifferentProfiles proves /compare works across any
+// profiles (not just revisions of the same one), up to 3 at once, and
+// highlights rows that differ while leaving identical rows unhighlighted.
+func TestCompareAcrossThreeDifferentProfiles(t *testing.T) {
 	repo, err := sqlite.Open(":memory:")
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
@@ -333,26 +334,27 @@ func TestCompareRevisions(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	ctx := context.Background()
-	profile, err := repo.Profiles().Create(ctx, "Compare Test")
-	if err != nil {
-		t.Fatalf("Create profile: %v", err)
-	}
-	if _, err := repo.Versions().Create(ctx, domain.ProfileVersion{
-		ProfileID: profile.ID, Revision: 1,
-		SourceJSON: []byte(`{}`), ResolvedJSON: []byte(`{"nozzle_temperature":"250","name":"Compare Test"}`),
-		SemanticHash: "h1",
-	}); err != nil {
-		t.Fatalf("Create v1: %v", err)
-	}
-	if _, err := repo.Versions().Create(ctx, domain.ProfileVersion{
-		ProfileID: profile.ID, Revision: 2,
-		SourceJSON: []byte(`{}`), ResolvedJSON: []byte(`{"nozzle_temperature":"260","name":"Compare Test"}`),
-		SemanticHash: "h2",
-	}); err != nil {
-		t.Fatalf("Create v2: %v", err)
+	mk := func(name string, resolved string) (string, int) {
+		p, err := repo.Profiles().Create(ctx, name)
+		if err != nil {
+			t.Fatalf("Create profile %s: %v", name, err)
+		}
+		v, err := repo.Versions().Create(ctx, domain.ProfileVersion{
+			ProfileID: p.ID, Revision: 1,
+			SourceJSON: []byte(`{}`), ResolvedJSON: []byte(resolved), SemanticHash: "h-" + name,
+		})
+		if err != nil {
+			t.Fatalf("Create version for %s: %v", name, err)
+		}
+		return p.ID, v.Revision
 	}
 
-	resp, err := http.Get(fmt.Sprintf("%s/profiles/%s/compare?a=1&b=2", ts.URL, profile.ID))
+	id1, rev1 := mk("Profile One", `{"nozzle_temperature":"250","filament_type":"ABS"}`)
+	id2, rev2 := mk("Profile Two", `{"nozzle_temperature":"260","filament_type":"ABS"}`)
+	id3, rev3 := mk("Profile Three", `{"nozzle_temperature":"250","filament_type":"ABS"}`)
+
+	url := fmt.Sprintf("%s/compare?item=%s:%d&item=%s:%d&item=%s:%d", ts.URL, id1, rev1, id2, rev2, id3, rev3)
+	resp, err := http.Get(url)
 	if err != nil {
 		t.Fatalf("GET compare: %v", err)
 	}
@@ -361,13 +363,14 @@ func TestCompareRevisions(t *testing.T) {
 		t.Fatalf("GET compare status = %d, want 200", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "nozzle_temperature") {
-		t.Fatalf("compare page missing the changed field: %s", body)
+	bodyStr := string(body)
+
+	for _, want := range []string{"Profile One", "Profile Two", "Profile Three", "Nozzle Temperature", "250", "260"} {
+		if !strings.Contains(bodyStr, want) {
+			t.Fatalf("compare page missing %q: %s", want, bodyStr)
+		}
 	}
-	if !strings.Contains(string(body), "250") || !strings.Contains(string(body), "260") {
-		t.Fatalf("compare page missing both revisions' values: %s", body)
-	}
-	if strings.Contains(string(body), ">name<") {
-		t.Fatalf("compare page shows an unchanged field (name), want it hidden: %s", body)
+	if !strings.Contains(bodyStr, "bg-amber-50") {
+		t.Fatalf("compare page did not highlight the differing row: %s", bodyStr)
 	}
 }
