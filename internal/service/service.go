@@ -126,17 +126,26 @@ func (s *Service) ImportBundle(ctx context.Context, r *zip.Reader) (domain.Profi
 
 // PublishResult is the outcome of RebindAndPublish.
 type PublishResult struct {
-	Rebind     *rebind.Result
-	Deployment *reconcile.Deployment
+	Rebind        *rebind.Result
+	Deployment    *reconcile.Deployment
+	TargetProfile *domain.RawProfile // what was staged/published, for a later CheckRecognition call
+	PublishedPath string              // set once Adapter.Publish succeeds
 }
 
-// RebindAndPublish runs the full design.md §22 acceptance-test sequence
-// after import: rebind -> validate -> stage -> publish -> (caller confirms
-// Studio was reopened) -> observe -> verify -> advance the state machine.
-// It refuses to advance past what it can actually prove, per decisions.md
-// #6: it stops at STAGED/INSTALLED_LOCALLY if rebind was ambiguous or
-// publish failed, and stops at SYNC_OBSERVED (never ACTIVE) unless the
-// observed semantic hash truly matches.
+// RebindAndPublish runs rebind -> validate -> stage -> publish, then checks
+// recognition immediately using whatever beforeInfo/afterInfo the caller
+// already has (design.md §22's sequence, end to end, when both snapshots
+// are available up front — e.g. in tests via reconcile.ManualDetector). For
+// a real Bambu Studio round trip, recognition can't be checked in the same
+// call: Studio must be closed to publish (decisions.md #4) and open to be
+// recognized, so afterInfo doesn't exist yet when this returns. Pass the
+// zero InfoFields{} for afterInfo in that case, then call CheckRecognition
+// once the user has reopened Studio.
+//
+// targetName overrides the rebound profile's name (which otherwise defaults
+// to leaf's own name — see internal/rebind). Passing a name distinct from
+// leaf.Name publishes a new profile alongside the original instead of
+// overwriting it in place; pass "" to keep rebind's default.
 //
 // The revision to publish as is computed internally via nextRevision, not
 // caller-supplied: a caller retrying after a failed publish (e.g. Bambu
@@ -146,17 +155,13 @@ type PublishResult struct {
 // that doesn't advance with reality risks a UNIQUE(profile_id, revision)
 // conflict on retry, or the reverse: two independent callers colliding on
 // the same number they both computed by hand.
-//
-// beforeInfo/afterInfo are the .info companion snapshots the caller reads
-// before staging and after the user has reopened Bambu Studio — this
-// function does not itself wait for a human, since that can't happen
-// unattended (decisions.md #4).
 func (s *Service) RebindAndPublish(
 	ctx context.Context,
 	sourceSet, targetSet resolver.Set,
 	leaf *domain.RawProfile,
 	targetParentCandidates []string,
 	profileID string,
+	targetName string,
 	beforeInfo, afterInfo reconcile.InfoFields,
 ) (*PublishResult, error) {
 	id, err := s.NewID()
@@ -180,8 +185,27 @@ func (s *Service) RebindAndPublish(
 		// nothing worth persisting yet, unlike publishFlow's states.
 		return result, fmt.Errorf("service: rebind: ambiguous target parent, candidates=%v: manual selection required", rb.Candidates)
 	}
+	if targetName != "" && targetName != rb.TargetProfile.Name {
+		rb.TargetProfile.Name = targetName
+		rb.TargetProfile.Fields = cloneWithName(rb.TargetProfile.Fields, targetName)
+	}
 
 	return s.publishFlow(ctx, dep, result, rb.TargetProfile, beforeInfo, afterInfo)
+}
+
+func cloneWithName(fields map[string]any, name string) map[string]any {
+	out := make(map[string]any, len(fields))
+	for k, v := range fields {
+		out[k] = v
+	}
+	out["name"] = name
+	// filament_settings_id is observed (findings.md) to echo the profile's
+	// own name in a single-element array; keep it consistent with the
+	// renamed profile rather than pointing at the old name.
+	if _, ok := out["filament_settings_id"]; ok {
+		out["filament_settings_id"] = []any{name}
+	}
+	return out
 }
 
 // Rollback finds profileID's most recent Deployment that reached ACTIVE and
@@ -250,11 +274,13 @@ func (s *Service) Rollback(ctx context.Context, profileID string, beforeInfo, af
 }
 
 // publishFlow is the shared tail of RebindAndPublish and Rollback: validate
-// -> stage -> publish -> (caller confirms Studio was reopened) -> observe
-// -> verify -> advance the state machine. It never advances further than it
-// can actually prove (decisions.md #6): it stops at INSTALLED_LOCALLY if
-// recognition hasn't been observed yet, and stops at SYNC_OBSERVED (never
-// ACTIVE) unless the observed semantic hash truly matches.
+// -> stage -> publish, then immediately attempt recognition/verify using
+// whatever beforeInfo/afterInfo the caller already has. It never advances
+// further than it can actually prove (decisions.md #6): it stops at
+// STAGED if publish failed, at INSTALLED_LOCALLY if recognition hasn't been
+// observed yet (the normal case for a real Bambu Studio round trip — see
+// CheckRecognition), and at SYNC_OBSERVED (never ACTIVE) unless the
+// observed semantic hash truly matches.
 func (s *Service) publishFlow(
 	ctx context.Context,
 	dep *reconcile.Deployment,
@@ -262,6 +288,7 @@ func (s *Service) publishFlow(
 	targetProfile *domain.RawProfile,
 	beforeInfo, afterInfo reconcile.InfoFields,
 ) (*PublishResult, error) {
+	result.TargetProfile = targetProfile
 	defer func() {
 		if saveErr := s.Repo.Deployments().Save(ctx, *dep); saveErr != nil {
 			fmt.Fprintf(os.Stderr, "service: save deployment %s: %v\n", dep.ID, saveErr)
@@ -300,6 +327,7 @@ func (s *Service) publishFlow(
 		}
 		return result, fmt.Errorf("service: publish: %w", err)
 	}
+	result.PublishedPath = published
 	if err := dep.Advance(reconcile.StateInstalledLocally, published); err != nil {
 		return result, err
 	}
@@ -329,9 +357,53 @@ func (s *Service) publishFlow(
 		return result, fmt.Errorf("service: record version: %w", err)
 	}
 
+	return s.checkRecognitionAndVerify(ctx, dep, result, targetProfile, published, beforeInfo, afterInfo)
+}
+
+// CheckRecognition resumes a Deployment that's sitting at INSTALLED_LOCALLY
+// (from a prior RebindAndPublish/Rollback call where recognition hadn't
+// happened yet) and attempts recognition/verify again with a fresh
+// afterInfo snapshot. It does not re-stage or re-publish — nothing about
+// the already-installed file changes here, only whether the state machine
+// can now prove Studio picked it up.
+func (s *Service) CheckRecognition(
+	ctx context.Context,
+	deploymentID string,
+	targetProfile *domain.RawProfile,
+	publishedPath string,
+	beforeInfo, afterInfo reconcile.InfoFields,
+) (*PublishResult, error) {
+	dep, err := s.Repo.Deployments().Get(ctx, deploymentID)
+	if err != nil {
+		return nil, fmt.Errorf("service: check recognition: load deployment: %w", err)
+	}
+	if dep.State != reconcile.StateInstalledLocally {
+		return nil, fmt.Errorf("service: check recognition: deployment %s is in state %s, want INSTALLED_LOCALLY", deploymentID, dep.State)
+	}
+	result := &PublishResult{Deployment: &dep, TargetProfile: targetProfile, PublishedPath: publishedPath}
+	return s.checkRecognitionAndVerify(ctx, &dep, result, targetProfile, publishedPath, beforeInfo, afterInfo)
+}
+
+// checkRecognitionAndVerify is the Detector-onward tail shared by
+// publishFlow (checking immediately) and CheckRecognition (checking later,
+// once the user has reopened Bambu Studio — decisions.md #4).
+func (s *Service) checkRecognitionAndVerify(
+	ctx context.Context,
+	dep *reconcile.Deployment,
+	result *PublishResult,
+	targetProfile *domain.RawProfile,
+	published string,
+	beforeInfo, afterInfo reconcile.InfoFields,
+) (*PublishResult, error) {
+	defer func() {
+		if saveErr := s.Repo.Deployments().Save(ctx, *dep); saveErr != nil {
+			fmt.Fprintf(os.Stderr, "service: save deployment %s: %v\n", dep.ID, saveErr)
+		}
+	}()
+
 	if !s.Detector.Observed(beforeInfo, afterInfo) {
-		// Not yet recognized — caller should retry Observed later; this is
-		// not a failure state, just "hasn't happened yet".
+		// Not yet recognized — caller should call CheckRecognition again
+		// later; this is not a failure state, just "hasn't happened yet".
 		return result, nil
 	}
 	if err := dep.Advance(reconcile.StateObservedByStudio, "recognition detector fired"); err != nil {

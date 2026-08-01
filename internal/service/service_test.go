@@ -111,7 +111,7 @@ func TestAcceptanceFlowImportRebindPublishVerify(t *testing.T) {
 	before := reconcile.InfoFields{"updated_time": "100", "setting_id": ""}
 	after := reconcile.InfoFields{"updated_time": "200", "setting_id": "PFUSnew"}
 
-	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, before, after)
+	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", before, after)
 	if err != nil {
 		t.Fatalf("RebindAndPublish: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestRebindAndPublishStopsAtInstalledLocallyWithoutRecognition(t *testing.T)
 		t.Fatalf("Create profile: %v", err)
 	}
 	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
-		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID,
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, "",
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if err != nil {
 		t.Fatalf("RebindAndPublish: %v", err)
@@ -233,7 +233,7 @@ func TestRollbackRepublishesLastKnownGoodRevision(t *testing.T) {
 
 	candidates := []string{"Bambu ABS @BBL P1S 0.4 nozzle"}
 	info := reconcile.InfoFields{"updated_time": "1", "setting_id": "id-1"}
-	goodResult, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, info, info)
+	goodResult, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", info, info)
 	if err != nil {
 		t.Fatalf("RebindAndPublish (establishing known-good): %v", err)
 	}
@@ -318,7 +318,7 @@ func TestRetryAfterStudioRunningReusesTheSameRevision(t *testing.T) {
 	candidates := []string{"Bambu ABS @BBL P1S 0.4 nozzle"}
 	info := reconcile.InfoFields{}
 
-	first, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, info, info)
+	first, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", info, info)
 	if err == nil || !errors.Is(err, bambuadapter.ErrStudioRunning) {
 		t.Fatalf("first attempt error = %v, want ErrStudioRunning", err)
 	}
@@ -328,7 +328,7 @@ func TestRetryAfterStudioRunningReusesTheSameRevision(t *testing.T) {
 	firstRevision := first.Deployment.Revision
 
 	studioRunning = false // user closed Bambu Studio
-	second, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, info, info)
+	second, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, "", info, info)
 	if err != nil {
 		t.Fatalf("retry after closing Studio: %v", err)
 	}
@@ -387,5 +387,82 @@ func TestImportSameBundleTwiceDoesNotConflict(t *testing.T) {
 	}
 	if v1.Revision == v2.Revision {
 		t.Fatalf("both imports got revision %d, want distinct revisions", v1.Revision)
+	}
+}
+
+// TestCheckRecognitionResumesAfterInstalledLocally is the real-world flow
+// this whole two-call split exists for: publish while Studio is closed
+// (recognition can't happen yet), then separately check recognition once
+// the user has reopened Studio — without re-staging or re-publishing.
+func TestCheckRecognitionResumesAfterInstalledLocally(t *testing.T) {
+	ctx := context.Background()
+	fixtureBase := filepath.Join("..", "..", "testdata", "fixtures", "x1c-to-p1s")
+	sourceSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source")) {
+		sourceSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		sourceSet[k] = v
+	}
+	targetSet := loadSet(t, filepath.Join(fixtureBase, "target-system"))
+	for k, v := range sourceSet {
+		if _, ok := targetSet[k]; !ok {
+			targetSet[k] = v
+		}
+	}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	svc := &service.Service{
+		Repo:     repo,
+		Adapter:  &bambuadapter.LocalAdapter{Dir: t.TempDir(), IsStudioRunning: func() (bool, error) { return false, nil }},
+		Detector: reconcile.ManualDetector{Confirmed: false}, // nothing to observe yet
+		NewID:    newID,
+	}
+
+	leaf := sourceSet["Syscode - AmazonBasics ABS 0.6"]
+	profile, err := repo.Profiles().Create(ctx, leaf.Name)
+	if err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+
+	first, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, "",
+		reconcile.InfoFields{}, reconcile.InfoFields{})
+	if err != nil {
+		t.Fatalf("RebindAndPublish: %v", err)
+	}
+	if first.Deployment.State != reconcile.StateInstalledLocally {
+		t.Fatalf("state = %s, want INSTALLED_LOCALLY", first.Deployment.State)
+	}
+
+	// Simulate the user reopening Studio, which (per decisions.md #5's
+	// RewriteDetector) would bump the .info file. Swap the Service's
+	// Detector to confirm, as if it now fired.
+	svc.Detector = reconcile.ManualDetector{Confirmed: true}
+
+	second, err := svc.CheckRecognition(ctx, first.Deployment.ID, first.TargetProfile, first.PublishedPath,
+		reconcile.InfoFields{}, reconcile.InfoFields{"updated_time": "1"})
+	if err != nil {
+		t.Fatalf("CheckRecognition: %v", err)
+	}
+	if second.Deployment.State != reconcile.StateActive {
+		t.Fatalf("state after CheckRecognition = %s, want ACTIVE (history: %+v)", second.Deployment.State, second.Deployment.History)
+	}
+
+	// The deployment loaded fresh from storage must carry forward the
+	// history recorded by the first call, not start over.
+	sawInstalledLocally := false
+	for _, tr := range second.Deployment.History {
+		if tr.To == reconcile.StateInstalledLocally {
+			sawInstalledLocally = true
+		}
+	}
+	if !sawInstalledLocally {
+		t.Fatalf("CheckRecognition's deployment history lost the earlier INSTALLED_LOCALLY transition: %+v", second.Deployment.History)
 	}
 }
