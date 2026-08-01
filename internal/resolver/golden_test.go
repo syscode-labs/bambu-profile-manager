@@ -102,3 +102,25 @@ func TestResolveCircular(t *testing.T) {
 		t.Fatal("expected error for circular inheritance, got nil")
 	}
 }
+
+func TestRootAncestorNameOnRealFixtureChain(t *testing.T) {
+	set, leaf := loadFixtureSet(t)
+	root, err := RootAncestorName(set, leaf)
+	if err != nil {
+		t.Fatalf("RootAncestorName: %v", err)
+	}
+	if root != "fdm_filament_common" {
+		t.Fatalf("root = %q, want %q (the real chain's top: leaf -> ... -> fdm_filament_abs -> fdm_filament_common)", root, "fdm_filament_common")
+	}
+}
+
+func TestRootAncestorNameStandalone(t *testing.T) {
+	leaf := &domain.RawProfile{Name: "standalone", Fields: map[string]any{"name": "standalone"}}
+	root, err := RootAncestorName(Set{}, leaf)
+	if err != nil {
+		t.Fatalf("RootAncestorName: %v", err)
+	}
+	if root != "standalone" {
+		t.Fatalf("root = %q, want %q (no parent -> itself is the root)", root, "standalone")
+	}
+}

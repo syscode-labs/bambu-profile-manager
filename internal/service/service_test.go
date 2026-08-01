@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -464,5 +465,88 @@ func TestCheckRecognitionResumesAfterInstalledLocally(t *testing.T) {
 	}
 	if !sawInstalledLocally {
 		t.Fatalf("CheckRecognition's deployment history lost the earlier INSTALLED_LOCALLY transition: %+v", second.Deployment.History)
+	}
+}
+
+// TestPublishTakesBackupAndCanBeRestored is the safety net decided on
+// instead of a manual export/review step before publishing: every publish
+// snapshots the live directory first, and that snapshot can restore it.
+func TestPublishTakesBackupAndCanBeRestored(t *testing.T) {
+	ctx := context.Background()
+	fixtureBase := filepath.Join("..", "..", "testdata", "fixtures", "x1c-to-p1s")
+	sourceSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source")) {
+		sourceSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		sourceSet[k] = v
+	}
+	targetSet := loadSet(t, filepath.Join(fixtureBase, "target-system"))
+	for k, v := range sourceSet {
+		if _, ok := targetSet[k]; !ok {
+			targetSet[k] = v
+		}
+	}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	bambuDir := t.TempDir()
+	backupsDir := t.TempDir()
+	// Pre-existing profile in the live dir, unrelated to this publish —
+	// proves the snapshot captures live state as it stood before publish.
+	preexisting := filepath.Join(bambuDir, "Unrelated Profile.json")
+	if err := os.WriteFile(preexisting, []byte(`{"name":"Unrelated Profile"}`), 0o644); err != nil {
+		t.Fatalf("write preexisting profile: %v", err)
+	}
+
+	svc := &service.Service{
+		Repo:       repo,
+		Adapter:    &bambuadapter.LocalAdapter{Dir: bambuDir, IsStudioRunning: func() (bool, error) { return false, nil }},
+		Detector:   reconcile.ManualDetector{Confirmed: true},
+		NewID:      newID,
+		BackupsDir: backupsDir,
+	}
+
+	leaf := sourceSet["Syscode - AmazonBasics ABS 0.6"]
+	profile, err := repo.Profiles().Create(ctx, leaf.Name)
+	if err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+
+	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, "",
+		reconcile.InfoFields{}, reconcile.InfoFields{})
+	if err != nil {
+		t.Fatalf("RebindAndPublish: %v", err)
+	}
+	if result.Snapshot == "" {
+		t.Fatal("PublishResult.Snapshot is empty, want a snapshot name")
+	}
+
+	backups, err := svc.ListBackups()
+	if err != nil {
+		t.Fatalf("ListBackups: %v", err)
+	}
+	if len(backups) != 1 || backups[0].Name != result.Snapshot {
+		t.Fatalf("ListBackups = %+v, want exactly the one snapshot from this publish", backups)
+	}
+
+	// Mutate the live directory post-publish, then restore.
+	if err := os.WriteFile(preexisting, []byte(`{"name":"Unrelated Profile","tampered":true}`), 0o644); err != nil {
+		t.Fatalf("mutate preexisting profile: %v", err)
+	}
+	if err := svc.RestoreBackup(result.Snapshot); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	restored, err := os.ReadFile(preexisting)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != `{"name":"Unrelated Profile"}` {
+		t.Fatalf("restored content = %q, want the pre-publish snapshot content", restored)
 	}
 }

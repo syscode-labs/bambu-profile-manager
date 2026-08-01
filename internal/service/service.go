@@ -13,7 +13,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
+	"github.com/syscod3/bambu-profile-manager/internal/backup"
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
 	"github.com/syscod3/bambu-profile-manager/internal/bundle"
 	"github.com/syscod3/bambu-profile-manager/internal/domain"
@@ -28,6 +30,14 @@ type Service struct {
 	Adapter  *bambuadapter.LocalAdapter
 	Detector reconcile.ObservationDetector
 	NewID    func() (string, error) // injected so tests don't need real UUIDs
+
+	// BackupsDir, if set, gets a point-in-time snapshot of Adapter.Dir
+	// (backup.Take) before every publish attempt reaches Adapter.Publish.
+	// This is the safety net that replaces a manual export/review step: no
+	// separate review checkpoint, but every publish is undoable via
+	// backup.Restore. Empty means no snapshot is taken (e.g. in tests that
+	// don't care about it).
+	BackupsDir string
 }
 
 // nextRevision returns the revision number a new ProfileVersion for
@@ -130,6 +140,7 @@ type PublishResult struct {
 	Deployment    *reconcile.Deployment
 	TargetProfile *domain.RawProfile // what was staged/published, for a later CheckRecognition call
 	PublishedPath string              // set once Adapter.Publish succeeds
+	Snapshot      string              // backup.Snapshot.Name taken just before publish, if BackupsDir was set
 }
 
 // RebindAndPublish runs rebind -> validate -> stage -> publish, then checks
@@ -311,6 +322,14 @@ func (s *Service) publishFlow(
 		return result, err
 	}
 
+	if s.BackupsDir != "" {
+		snap, err := backup.Take(s.Adapter.Dir, s.BackupsDir)
+		if err != nil {
+			return result, fmt.Errorf("service: backup before publish: %w", err)
+		}
+		result.Snapshot = snap.Name
+	}
+
 	published, err := s.Adapter.Publish(ctx, staged)
 	if err != nil {
 		if errors.Is(err, bambuadapter.ErrStudioRunning) {
@@ -438,4 +457,24 @@ func (s *Service) checkRecognitionAndVerify(
 		return result, err
 	}
 	return result, nil
+}
+
+// ListBackups returns every point-in-time snapshot taken before a publish,
+// newest first.
+func (s *Service) ListBackups() ([]backup.Snapshot, error) {
+	if s.BackupsDir == "" {
+		return nil, nil
+	}
+	return backup.List(s.BackupsDir)
+}
+
+// RestoreBackup restores a named snapshot (backup.Snapshot.Name, as
+// returned by ListBackups) back into the live Bambu Studio directory.
+// Non-destructive: overwrites files present in the snapshot, never deletes
+// files added since (backup.Restore).
+func (s *Service) RestoreBackup(name string) error {
+	if s.BackupsDir == "" {
+		return fmt.Errorf("service: restore backup: no BackupsDir configured")
+	}
+	return backup.Restore(filepath.Join(s.BackupsDir, name), s.Adapter.Dir)
 }

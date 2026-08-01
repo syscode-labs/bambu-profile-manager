@@ -61,3 +61,28 @@ func Resolve(set Set, leaf *domain.RawProfile) (effective *domain.RawProfile, ch
 	}
 	return &domain.RawProfile{Name: leaf.Name, Inherits: leaf.Inherits, Fields: fields}, chain, nil
 }
+
+// RootAncestorName returns the name of the top of leaf's inherits chain —
+// the profile with no further parent. For filament profiles this is the
+// material-family template (e.g. "fdm_filament_abs"), independent of any
+// printer/nozzle-specific ancestor in between. Used to match "same
+// material, different printer" candidates without the caller enumerating
+// them by hand.
+func RootAncestorName(set Set, leaf *domain.RawProfile) (string, error) {
+	seen := map[string]bool{}
+	cur := leaf
+	for {
+		if seen[cur.Name] {
+			return "", fmt.Errorf("%w: %s", ErrCircular, cur.Name)
+		}
+		seen[cur.Name] = true
+		if cur.Inherits == "" {
+			return cur.Name, nil
+		}
+		parent, ok := set[cur.Inherits]
+		if !ok {
+			return "", fmt.Errorf("%w: %q (parent of %q)", ErrMissingParent, cur.Inherits, cur.Name)
+		}
+		cur = parent
+	}
+}

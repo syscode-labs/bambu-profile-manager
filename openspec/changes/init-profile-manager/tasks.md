@@ -39,6 +39,19 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 ## Deferred (post-v1)
 - PostgreSQL adapter, Google Sheets projection, OrcaSlicer support, experimental Bambu Cloud adapter, multi-instance deployment
 
+## Post-launch feature: copy a filament profile to another printer, dependencies abstracted (2026-08-01)
+
+User request after live-testing: pick a profile as it appears under printer A, pick a target printer, get it copied over with settings (vendor/name/color/print temps) intact — no manual target-parent list. Clarified via AskUserQuestion:
+- Auto-match target parent by (same material root ancestor + printer token in name); ambiguous matches (2+) → stop and ask, never auto-pick.
+- Target profile name: tool suggests `<source name> @<printer token>`, user confirms/edits before publish.
+- No manual export/review-files step; instead every publish takes an automatic point-in-time backup with a restore action, in its own UI pane.
+
+- [x] `internal/resolver.RootAncestorName` — walks to the top of a chain (material-family template), tested against the real fixture chain.
+- [x] `internal/rebind.FindCandidateParents` — auto-search a target set by (root ancestor match + printer-token whole-word match via regex, avoids "P1S" matching "P1P"); returns all matches, feeds straight into the existing `Rebind`/`RebindAndPublish` candidate list. Tested: single real match, no match on wrong material, ambiguous returns both (synthetic decoy), end-to-end into `Rebind`.
+- [x] `internal/backup` — `Take`/`List`/`Restore` point-in-time directory snapshots (non-recursive, skips `.staging`/`.backups`); `Restore` is non-destructive (overwrites, never deletes files added since). Tested including newest-first ordering and staging-dir exclusion.
+- [x] `Service.BackupsDir` + auto-snapshot wired into `publishFlow` right before `Adapter.Publish`; `Service.ListBackups`/`RestoreBackup`. Tested end-to-end: publish takes a snapshot, unrelated live file mutated post-publish, restored back to pre-publish content, files added after the snapshot untouched.
+- [ ] CLI/web UI surface for this flow (suggested-name confirmation step, ambiguity picker, Backups pane) — backend done, frontend next.
+
 ## Primary Acceptance Test (design.md §22, fixture swapped per decisions.md #8)
 - [x] Proven in simulation — "Syscode - AmazonBasics ABS 0.6" @ X1C → P1S: export→import→rebind→publish→verify loop, against real fixture data, culminating in `ROUND_TRIP_VERIFIED`/`ACTIVE`, in `internal/service/service_test.go` (`TestAcceptanceFlowImportRebindPublishVerify`, plus retry/rollback paths). `internal/service` wires storage→bundle→rebind→bambuadapter→reconcile together; `cmd/bambupm` exposes it as a CLI (`scan`, `resolve`, `serve`, `publish`, `check-recognition`).
 - [x] **Proven live against real Bambu Studio, 2026-08-01.** Full run: publish (Studio closed) → user reopened Studio, selected the profile, sliced a model, edited a value, saved → `check-recognition` correctly caught the resulting `SEMANTIC_MISMATCH` (real divergence, correctly refused to claim verified) → user reverted the edit, republished as a new revision → user saved again in Studio → `check-recognition` reached genuine `ACTIVE`. `RewriteDetector` (decisions.md #5) confirmed working, trigger identified as an explicit Save in Studio (not reopen, not select, not slice alone). A false-positive bug was found and fixed mid-run (see decisions.md #5 and the "Bug found running the real CLI" note under Phase 3 below) — the process of live-testing is what caught it.
