@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -59,7 +60,7 @@ func flattenFixturesInto(t *testing.T, dest string) {
 	}
 }
 
-func newTestServerWithLiveDir(t *testing.T) (*httptest.Server, string) {
+func newTestServerWithLiveDir(t *testing.T) (*httptest.Server, string, *webui.Server) {
 	t.Helper()
 	repo, err := sqlite.Open(":memory:")
 	if err != nil {
@@ -81,11 +82,11 @@ func newTestServerWithLiveDir(t *testing.T) (*httptest.Server, string) {
 	srv := &webui.Server{Svc: svc, UserDir: liveDir}
 	ts := httptest.NewServer(srv.Routes())
 	t.Cleanup(ts.Close)
-	return ts, liveDir
+	return ts, liveDir, srv
 }
 
 func TestCopyFormListsLiveProfiles(t *testing.T) {
-	ts, _ := newTestServerWithLiveDir(t)
+	ts, _, _ := newTestServerWithLiveDir(t)
 	resp, err := http.Get(ts.URL + "/copy")
 	if err != nil {
 		t.Fatalf("GET /copy: %v", err)
@@ -98,7 +99,7 @@ func TestCopyFormListsLiveProfiles(t *testing.T) {
 }
 
 func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
-	ts, liveDir := newTestServerWithLiveDir(t)
+	ts, liveDir, _ := newTestServerWithLiveDir(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 	// Preview: single unambiguous match in this fixture set.
@@ -159,8 +160,8 @@ func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 	}
 	defer detailResp.Body.Close()
 	detailBody, _ := io.ReadAll(detailResp.Body)
-	if !strings.Contains(string(detailBody), "Check if Studio picked it up") {
-		t.Fatalf("deployment detail missing check-recognition action: %s", detailBody)
+	if !strings.Contains(string(detailBody), "can't be automated") {
+		t.Fatalf("deployment detail missing the Save-in-Studio explanation: %s", detailBody)
 	}
 
 	// Simulate Studio having saved the profile (bumps .info — the confirmed
@@ -190,8 +191,63 @@ func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 	}
 }
 
+// TestBackgroundPollerDetectsRecognitionWithoutManualCheck covers the
+// "why do I have to click Check too" complaint: once Studio has saved the
+// profile (the one step that genuinely can't be automated — see decisions.md
+// #5), the deployment should reach ACTIVE on its own via PollRecognition,
+// with no POST to /deployments/{id}/check at all.
+func TestBackgroundPollerDetectsRecognitionWithoutManualCheck(t *testing.T) {
+	ts, liveDir, srv := newTestServerWithLiveDir(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	const newName = "Poller Test @P1S"
+	publishResp, err := client.PostForm(ts.URL+"/copy/publish", map[string][]string{
+		"name":         {"Syscode - AmazonBasics ABS 0.6"},
+		"parent":       {"Bambu ABS @BBL P1S 0.4 nozzle"},
+		"confirm_name": {newName},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/publish: %v", err)
+	}
+	defer publishResp.Body.Close()
+	publishBody, _ := io.ReadAll(publishResp.Body)
+	idx := strings.Index(string(publishBody), "/deployments/")
+	if idx == -1 {
+		t.Fatalf("publish result missing a deployment link: %s", publishBody)
+	}
+	rest := string(publishBody)[idx+len("/deployments/"):]
+	deploymentID := rest[:strings.IndexAny(rest, "\"'")]
+
+	// Simulate Studio saving the profile (bumps .info) — no manual check call.
+	infoPath := filepath.Join(liveDir, newName+".info")
+	if err := os.WriteFile(infoPath, []byte("updated_time = 12345\nsetting_id = PFUStest\n"), 0o644); err != nil {
+		t.Fatalf("write .info: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.PollRecognition(ctx, 20*time.Millisecond)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		resp, err := http.Get(ts.URL + "/deployments/" + deploymentID)
+		if err != nil {
+			t.Fatalf("GET /deployments/%s: %v", deploymentID, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if strings.Contains(string(body), ">ACTIVE<") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("deployment did not reach ACTIVE via background polling within 2s: %s", body)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestBackupsListAndRestoreEndToEnd(t *testing.T) {
-	ts, liveDir := newTestServerWithLiveDir(t)
+	ts, liveDir, _ := newTestServerWithLiveDir(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 	// Publish once to generate a backup.
@@ -385,7 +441,7 @@ func TestCompareAcrossThreeDifferentProfiles(t *testing.T) {
 // preview button: /api/profile-preview?name=... must return a bare HTML
 // fragment (no page shell) with the profile's summary fields.
 func TestProfilePreviewFragmentReturnsSummary(t *testing.T) {
-	ts, _ := newTestServerWithLiveDir(t)
+	ts, _, _ := newTestServerWithLiveDir(t)
 
 	resp, err := http.Get(ts.URL + "/api/profile-preview?name=" + url.QueryEscape("Syscode - AmazonBasics ABS 0.6"))
 	if err != nil {
@@ -406,7 +462,7 @@ func TestProfilePreviewFragmentReturnsSummary(t *testing.T) {
 }
 
 func TestProfilePreviewFragmentNotFound(t *testing.T) {
-	ts, _ := newTestServerWithLiveDir(t)
+	ts, _, _ := newTestServerWithLiveDir(t)
 
 	resp, err := http.Get(ts.URL + "/api/profile-preview?name=" + url.QueryEscape("Does Not Exist"))
 	if err != nil {
@@ -419,7 +475,7 @@ func TestProfilePreviewFragmentNotFound(t *testing.T) {
 }
 
 func TestIndexShowsUntrackedLiveProfiles(t *testing.T) {
-	ts, _ := newTestServerWithLiveDir(t)
+	ts, _, _ := newTestServerWithLiveDir(t)
 
 	resp, err := http.Get(ts.URL + "/")
 	if err != nil {

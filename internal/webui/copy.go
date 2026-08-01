@@ -2,6 +2,7 @@ package webui
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"html/template"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
 	"github.com/syscod3/bambu-profile-manager/internal/rebind"
@@ -431,11 +433,18 @@ var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Parse(
   </li>{{end}}
   </ol>
   {{if eq (print .Deployment.State) "INSTALLED_LOCALLY"}}
-  <form method="post" action="/deployments/{{.Deployment.ID}}/check" class="border-t border-zinc-100 pt-4">
-    <p class="text-sm text-zinc-500 mb-3">Reopen Bambu Studio, select the profile, and Save it once &mdash; the confirmed trigger (reopening/selecting/slicing alone don't bump the local file Studio uses to track it).</p>
-    {{if .JustChecked}}<p class="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 mb-3">No change yet &mdash; Studio hasn't saved this profile on this machine yet. Save it in Studio, then press "Check if Studio picked it up" again.</p>{{end}}
-    <button type="submit" class="px-4 py-2 rounded-lg border border-zinc-300 text-sm font-medium hover:bg-zinc-50 transition">Check if Studio picked it up</button>
-  </form>
+  <div class="border-t border-zinc-100 pt-4 space-y-2">
+    <p class="text-sm text-zinc-500">
+      One step is on you and can't be automated: reopen Bambu Studio, select the profile, and Save it once.
+      That's the only thing that updates Studio's own local tracking file &mdash; reopening, selecting, or
+      slicing the profile alone don't, and bambupm has no way to trigger or shortcut a Save inside Studio's UI.
+    </p>
+    <p class="text-sm text-zinc-500">
+      Everything after that is automatic: bambupm checks this deployment every few seconds in the background and
+      will flip it to <code class="bg-zinc-100 px-1 rounded">ACTIVE</code> (or flag a mismatch) the moment it
+      notices &mdash; just come back and refresh this page, no button to press.
+    </p>
+  </div>
   {{end}}
 </section>
 `))
@@ -447,26 +456,23 @@ func (s *Server) handleDeploymentDetail(w http.ResponseWriter, r *http.Request) 
 		httpError(w, err)
 		return
 	}
-	data := struct {
-		Deployment  any
-		JustChecked bool
-	}{Deployment: dep, JustChecked: r.URL.Query().Get("checked") == "1"}
+	data := struct{ Deployment any }{Deployment: dep}
 	renderPage(w, deploymentDetailTmpl, data, "Deployment", "Deployment "+id, "", "", "")
 }
 
-func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	ctx := r.Context()
-
+// recheckDeployment re-derives a deployment's published path/target profile
+// from its stored revision and asks Service.CheckRecognition whether Bambu
+// Studio has picked it up since. Shared by the manual HTTP endpoint (kept
+// for tests/scripting) and the background poller — both need the identical
+// lookup, only the caller differs.
+func (s *Server) recheckDeployment(ctx context.Context, id string) error {
 	dep, err := s.Svc.Repo.Deployments().Get(ctx, id)
 	if err != nil {
-		httpError(w, err)
-		return
+		return err
 	}
 	versions, err := s.Svc.Repo.Versions().List(ctx, dep.ProfileID)
 	if err != nil {
-		httpError(w, err)
-		return
+		return err
 	}
 	var resolvedJSON []byte
 	for _, v := range versions {
@@ -476,13 +482,11 @@ func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if resolvedJSON == nil {
-		http.Error(w, "check-recognition: no stored version for this revision", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("recheck: no stored version for revision %d of deployment %s", dep.Revision, id)
 	}
 	targetProfile, err := service.TargetProfileFromVersion(resolvedJSON)
 	if err != nil {
-		httpError(w, err)
-		return
+		return err
 	}
 	publishedPath := filepath.Join(s.UserDir, targetProfile.Name+".json")
 	infoPath := filepath.Join(s.UserDir, targetProfile.Name+".info")
@@ -491,20 +495,70 @@ func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) 
 	if b, err := os.ReadFile(infoPath); err == nil {
 		afterInfo = reconcile.ParseInfo(b)
 	} else if !os.IsNotExist(err) {
-		httpError(w, err)
-		return
+		return err
 	}
 
-	if _, err := s.Svc.CheckRecognition(ctx, id, targetProfile, publishedPath, reconcile.InfoFields{}, afterInfo); err != nil {
+	_, err = s.Svc.CheckRecognition(ctx, id, targetProfile, publishedPath, reconcile.InfoFields{}, afterInfo)
+	return err
+}
+
+func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.recheckDeployment(r.Context(), id); err != nil {
 		// Still redirect rather than 500: the deployment was saved with
 		// whatever state it reached, and that's visible in its history
 		// (e.g. SEMANTIC_MISMATCH is a real, informative outcome, not a
 		// request failure). Logged so a genuine internal error (I/O, JSON)
-		// isn't completely invisible, since the page itself won't show one
-		// beyond "still INSTALLED_LOCALLY".
+		// isn't completely invisible.
 		fmt.Fprintf(os.Stderr, "check-recognition %s: %v\n", id, err)
 	}
-	http.Redirect(w, r, "/deployments/"+id+"?checked=1", http.StatusSeeOther)
+	http.Redirect(w, r, "/deployments/"+id, http.StatusSeeOther)
+}
+
+// pollOnce scans every deployment sitting at INSTALLED_LOCALLY and rechecks
+// it once. Called on a timer by PollRecognition; split out so tests can
+// drive a single pass deterministically instead of racing a real ticker.
+func (s *Server) pollOnce(ctx context.Context) {
+	profiles, err := s.Svc.Repo.Profiles().List(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "recognition poll: list profiles: %v\n", err)
+		return
+	}
+	for _, p := range profiles {
+		deps, err := s.Svc.Repo.Deployments().ListByProfile(ctx, p.ID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "recognition poll: list deployments for %s: %v\n", p.ID, err)
+			continue
+		}
+		for _, dep := range deps {
+			if dep.State != reconcile.StateInstalledLocally {
+				continue
+			}
+			if err := s.recheckDeployment(ctx, dep.ID); err != nil {
+				fmt.Fprintf(os.Stderr, "recognition poll: deployment %s: %v\n", dep.ID, err)
+			}
+		}
+	}
+}
+
+// PollRecognition runs pollOnce on a fixed interval until ctx is canceled.
+// Bambu Studio only updates a profile's local tracking metadata when the
+// user Saves it in Studio's own UI (confirmed empirically — reopening,
+// selecting, or slicing the profile alone do not); bambupm cannot trigger or
+// detect that moment except by re-reading the file afterwards, so this is
+// the closest thing to "automatic" available: the user still Saves once in
+// Studio, but no longer has to come back and click a button to notice it.
+func (s *Server) PollRecognition(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.pollOnce(ctx)
+		}
+	}
 }
 
 var backupsTmpl = template.Must(template.New("backups").Parse(`

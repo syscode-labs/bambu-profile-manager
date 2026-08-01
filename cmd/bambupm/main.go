@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
 	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
@@ -197,6 +198,8 @@ func cmdServe(args []string) {
 	fmt.Fprintf(os.Stderr, "bambupm web UI listening on %s (db: %s)\n", addr, dbPath)
 	if userDir == "" {
 		fmt.Fprintln(os.Stderr, "note: --user-dir not set — list/detail/import work, but Copy/Backups pages need it")
+	} else {
+		go srv.PollRecognition(context.Background(), 5*time.Second)
 	}
 	if err := http.ListenAndServe(addr, srv.Routes()); err != nil {
 		fmt.Fprintln(os.Stderr, "serve:", err)
