@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -136,6 +137,19 @@ func studioWarning(svc *service.Service) template.HTML {
 			`<p class="text-red-700/80">Publishing requires it closed first. Close Studio, then continue.</p></div></div>`)
 	}
 	return ""
+}
+
+// handleStudioStatus re-checks whether Bambu Studio is running and returns
+// the same warning-banner fragment studioWarning renders server-side on
+// page load — polled client-side (see shell.go's script) so the banner
+// reflects Studio actually being closed/reopened without a page reload.
+// The underlying check (bambuadapter.PgrepStudioRunning, in production) is
+// one OS-level process check regardless of which copy flow the page is on,
+// so this always uses the filament Service; it would give an identical
+// answer via ProcessSvc.
+func (s *Server) handleStudioStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	io.WriteString(w, string(studioWarning(s.Svc)))
 }
 
 var copyFormTmpl = template.Must(template.New("copyForm").Parse(`

@@ -68,11 +68,24 @@ var shellTmpl = template.Must(template.New("shell").Parse(`<!doctype html>
     {{if .HeaderSubtitle}}<p class="text-sm text-zinc-500">{{.HeaderSubtitle}}</p>{{end}}
   </header>
   <div class="px-8 py-6 max-w-3xl space-y-6">
-    {{.Warning}}
+    <div id="studio-warning">{{.Warning}}</div>
     {{.Content}}
   </div>
 </main>
 
+<script>
+(function() {
+  var el = document.getElementById('studio-warning');
+  if (!el) return;
+  function poll() {
+    fetch('/api/studio-status')
+      .then(function(r) { return r.ok ? r.text() : Promise.reject(r.status); })
+      .then(function(html) { el.innerHTML = html; })
+      .catch(function() {});
+  }
+  setInterval(poll, 5000);
+})();
+</script>
 </body>
 </html>`))
 

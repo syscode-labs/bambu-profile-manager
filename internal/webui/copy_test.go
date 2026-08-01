@@ -670,6 +670,52 @@ func TestStudioRunningWarningShownAndPublishBlocked(t *testing.T) {
 	}
 }
 
+// TestStudioStatusEndpointReflectsLiveChange covers the page-level poller
+// (shell.go fetches this every 5s): the banner must reflect Studio's
+// current state on each call, not just what was true when the page first
+// loaded — simulated here with a checker whose answer changes between two
+// requests to the same running server.
+func TestStudioStatusEndpointReflectsLiveChange(t *testing.T) {
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	running := true
+	svc := &service.Service{
+		Repo:       repo,
+		Adapter:    &bambuadapter.LocalAdapter{Dir: t.TempDir(), IsStudioRunning: func() (bool, error) { return running, nil }},
+		Detector:   reconcile.RewriteDetector{},
+		NewID:      newTestID,
+		BackupsDir: t.TempDir(),
+	}
+	srv := &webui.Server{Svc: svc}
+	ts := httptest.NewServer(srv.Routes())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/api/studio-status")
+	if err != nil {
+		t.Fatalf("GET /api/studio-status: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "Bambu Studio appears to be running") {
+		t.Fatalf("expected running warning, got: %s", body)
+	}
+
+	running = false
+	resp, err = http.Get(ts.URL + "/api/studio-status")
+	if err != nil {
+		t.Fatalf("GET /api/studio-status: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(body), "appears to be running") {
+		t.Fatalf("expected empty response once Studio closed, got: %s", body)
+	}
+}
+
 // TestCompareAcrossThreeDifferentProfiles proves /compare works across any
 // profiles (not just revisions of the same one), up to 3 at once, and
 // highlights rows that differ while leaving identical rows unhighlighted.

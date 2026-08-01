@@ -125,6 +125,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /live/{name}", s.handleLiveProfile)
 	mux.HandleFunc("GET /live/process/{name}", s.handleLiveProfileProcess)
 	mux.HandleFunc("GET /api/profile-preview", s.handleProfilePreviewFragment)
+	mux.HandleFunc("GET /api/studio-status", s.handleStudioStatus)
 	mux.HandleFunc("GET /compare", s.handleComparePage)
 	mux.HandleFunc("GET /import", s.handleImportForm)
 	mux.HandleFunc("POST /import", s.handleImport)
