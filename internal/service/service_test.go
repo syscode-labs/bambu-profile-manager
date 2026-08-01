@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -110,7 +111,7 @@ func TestAcceptanceFlowImportRebindPublishVerify(t *testing.T) {
 	before := reconcile.InfoFields{"updated_time": "100", "setting_id": ""}
 	after := reconcile.InfoFields{"updated_time": "200", "setting_id": "PFUSnew"}
 
-	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, version.Revision+1, before, after)
+	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, before, after)
 	if err != nil {
 		t.Fatalf("RebindAndPublish: %v", err)
 	}
@@ -170,7 +171,7 @@ func TestRebindAndPublishStopsAtInstalledLocallyWithoutRecognition(t *testing.T)
 		t.Fatalf("Create profile: %v", err)
 	}
 	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
-		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID, 1,
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, profile.ID,
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if err != nil {
 		t.Fatalf("RebindAndPublish: %v", err)
@@ -225,14 +226,14 @@ func TestRollbackRepublishesLastKnownGoodRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zip.NewReader: %v", err)
 	}
-	profile, version, err := svc.ImportBundle(ctx, zr)
+	profile, _, err := svc.ImportBundle(ctx, zr)
 	if err != nil {
 		t.Fatalf("ImportBundle: %v", err)
 	}
 
 	candidates := []string{"Bambu ABS @BBL P1S 0.4 nozzle"}
 	info := reconcile.InfoFields{"updated_time": "1", "setting_id": "id-1"}
-	goodResult, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, version.Revision+1, info, info)
+	goodResult, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, info, info)
 	if err != nil {
 		t.Fatalf("RebindAndPublish (establishing known-good): %v", err)
 	}
@@ -270,5 +271,121 @@ func TestRollbackRepublishesLastKnownGoodRevision(t *testing.T) {
 	}
 	if len(deployments) != 2 {
 		t.Fatalf("stored %d deployments, want 2 (the original publish + the rollback)", len(deployments))
+	}
+}
+
+// TestRetryAfterStudioRunningReusesTheSameRevision exercises decisions.md
+// #4's expected flow: publish refuses because Bambu Studio is open, the
+// user closes it, the caller retries. The retry must land on the same
+// revision as the failed attempt and succeed, not hit
+// profile_versions' UNIQUE(profile_id, revision) constraint.
+func TestRetryAfterStudioRunningReusesTheSameRevision(t *testing.T) {
+	ctx := context.Background()
+	fixtureBase := filepath.Join("..", "..", "testdata", "fixtures", "x1c-to-p1s")
+	sourceSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source")) {
+		sourceSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		sourceSet[k] = v
+	}
+	targetSet := loadSet(t, filepath.Join(fixtureBase, "target-system"))
+	for k, v := range sourceSet {
+		if _, ok := targetSet[k]; !ok {
+			targetSet[k] = v
+		}
+	}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	studioRunning := true
+	svc := &service.Service{
+		Repo:     repo,
+		Adapter:  &bambuadapter.LocalAdapter{Dir: t.TempDir(), IsStudioRunning: func() (bool, error) { return studioRunning, nil }},
+		Detector: reconcile.ManualDetector{Confirmed: true},
+		NewID:    newID,
+	}
+
+	leaf := sourceSet["Syscode - AmazonBasics ABS 0.6"]
+	profile, err := repo.Profiles().Create(ctx, leaf.Name)
+	if err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+	candidates := []string{"Bambu ABS @BBL P1S 0.4 nozzle"}
+	info := reconcile.InfoFields{}
+
+	first, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, info, info)
+	if err == nil || !errors.Is(err, bambuadapter.ErrStudioRunning) {
+		t.Fatalf("first attempt error = %v, want ErrStudioRunning", err)
+	}
+	if first.Deployment.State != reconcile.StateStaged {
+		t.Fatalf("first attempt state = %s, want STAGED (Studio-running isn't a failure state, just \"hasn't happened yet\" — decisions.md #4)", first.Deployment.State)
+	}
+	firstRevision := first.Deployment.Revision
+
+	studioRunning = false // user closed Bambu Studio
+	second, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, info, info)
+	if err != nil {
+		t.Fatalf("retry after closing Studio: %v", err)
+	}
+	if second.Deployment.State != reconcile.StateActive {
+		t.Fatalf("retry state = %s, want ACTIVE (history: %+v)", second.Deployment.State, second.Deployment.History)
+	}
+	if second.Deployment.Revision != firstRevision {
+		t.Fatalf("retry used revision %d, want it to reuse the failed attempt's revision %d", second.Deployment.Revision, firstRevision)
+	}
+}
+
+// TestImportSameBundleTwiceDoesNotConflict guards against the same root
+// cause the retry test above covers: nothing should trust a fixed revision
+// number across repeated calls when nothing was actually persisted for it,
+// or nothing should re-derive a number already taken.
+func TestImportSameBundleTwiceDoesNotConflict(t *testing.T) {
+	ctx := context.Background()
+	fixtureBase := filepath.Join("..", "..", "testdata", "fixtures", "x1c-to-p1s")
+	sourceSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source")) {
+		sourceSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		sourceSet[k] = v
+	}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+	svc := &service.Service{Repo: repo}
+
+	const leafName = "Syscode - AmazonBasics ABS 0.6"
+	var bundleBuf bytes.Buffer
+	if _, err := svc.ExportBundle(ctx, &bundleBuf, sourceSet, leafName); err != nil {
+		t.Fatalf("ExportBundle: %v", err)
+	}
+	bundleBytes := bundleBuf.Bytes()
+
+	openZip := func() *zip.Reader {
+		zr, err := zip.NewReader(bytes.NewReader(bundleBytes), int64(len(bundleBytes)))
+		if err != nil {
+			t.Fatalf("zip.NewReader: %v", err)
+		}
+		return zr
+	}
+
+	_, v1, err := svc.ImportBundle(ctx, openZip())
+	if err != nil {
+		t.Fatalf("first ImportBundle: %v", err)
+	}
+	_, v2, err := svc.ImportBundle(ctx, openZip())
+	if err != nil {
+		t.Fatalf("second ImportBundle (same bundle again): %v", err)
+	}
+	if v1.Revision == v2.Revision {
+		t.Fatalf("both imports got revision %d, want distinct revisions", v1.Revision)
 	}
 }

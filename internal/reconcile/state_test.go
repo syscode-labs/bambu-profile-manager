@@ -74,3 +74,22 @@ func TestFailurePathIsReachableAndTerminal(t *testing.T) {
 		t.Fatal("Advance out of a failure state succeeded, want rejection (start a new Deployment revision instead)")
 	}
 }
+
+func TestPublishCanFailDirectlyFromStaged(t *testing.T) {
+	d := reconcile.New("dep-1", "profile-1", 1)
+	if err := d.Advance(reconcile.StateValidated, "ok"); err != nil {
+		t.Fatalf("Advance(VALIDATED): %v", err)
+	}
+	if err := d.Advance(reconcile.StateStaged, "ok"); err != nil {
+		t.Fatalf("Advance(STAGED): %v", err)
+	}
+	// A publish failure that isn't "Studio was open" (e.g. a filesystem
+	// error writing into the live profile directory) must be recordable
+	// without ever having reached INSTALLED_LOCALLY.
+	if err := d.Advance(reconcile.StateRejectedByStudio, "write failed"); err != nil {
+		t.Fatalf("Advance(STAGED -> REJECTED_BY_STUDIO): %v", err)
+	}
+	if !d.State.IsFailure() {
+		t.Fatalf("State.IsFailure() = false for %s", d.State)
+	}
+}

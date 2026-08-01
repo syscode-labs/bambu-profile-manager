@@ -30,8 +30,28 @@ type Service struct {
 	NewID    func() (string, error) // injected so tests don't need real UUIDs
 }
 
+// nextRevision returns the revision number a new ProfileVersion for
+// profileID should use: 1 if none exist yet, otherwise the latest stored
+// revision + 1. Computing this fresh (rather than trusting a caller- or
+// bundle-supplied number) is what makes retries and re-exports safe: if
+// nothing was actually persisted since the last call, the same number comes
+// back, instead of drifting ahead or colliding with profile_versions'
+// UNIQUE(profile_id, revision) constraint.
+func (s *Service) nextRevision(ctx context.Context, profileID string) (int, error) {
+	latest, err := s.Repo.Versions().Latest(ctx, profileID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return 1, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("service: next revision: %w", err)
+	}
+	return latest.Revision + 1, nil
+}
+
 // ExportBundle resolves leafName against set and writes a .profilepack to w,
-// recording it as the profile's next revision in storage.
+// stamping it with the profile's next revision number. Exporting does not
+// itself persist a ProfileVersion — that number is only reserved for real
+// once something (an import, a publish) actually writes it.
 func (s *Service) ExportBundle(ctx context.Context, w io.Writer, set resolver.Set, leafName string) (domain.Profile, error) {
 	p, err := s.Repo.Profiles().GetByName(ctx, leafName)
 	if errors.Is(err, storage.ErrNotFound) {
@@ -41,11 +61,9 @@ func (s *Service) ExportBundle(ctx context.Context, w io.Writer, set resolver.Se
 		return domain.Profile{}, fmt.Errorf("service: export: profile: %w", err)
 	}
 
-	revision := 1
-	if latest, err := s.Repo.Versions().Latest(ctx, p.ID); err == nil {
-		revision = latest.Revision + 1
-	} else if !errors.Is(err, storage.ErrNotFound) {
-		return domain.Profile{}, fmt.Errorf("service: export: latest version: %w", err)
+	revision, err := s.nextRevision(ctx, p.ID)
+	if err != nil {
+		return domain.Profile{}, fmt.Errorf("service: export: %w", err)
 	}
 
 	var buf bytes.Buffer
@@ -83,9 +101,19 @@ func (s *Service) ImportBundle(ctx context.Context, r *zip.Reader) (domain.Profi
 		return domain.Profile{}, domain.ProfileVersion{}, err
 	}
 
+	// Assign the revision at import time rather than trusting
+	// imported.Manifest.Revision: two exports taken before either is
+	// imported both stamp the same "next" number (ExportBundle doesn't
+	// reserve it), and importing the same bundle twice must produce a new
+	// revision, not a UNIQUE(profile_id, revision) constraint error.
+	revision, err := s.nextRevision(ctx, p.ID)
+	if err != nil {
+		return domain.Profile{}, domain.ProfileVersion{}, fmt.Errorf("service: import: %w", err)
+	}
+
 	v, err := s.Repo.Versions().Create(ctx, domain.ProfileVersion{
 		ProfileID:    p.ID,
-		Revision:     imported.Manifest.Revision,
+		Revision:     revision,
 		SourceJSON:   sourceJSON,
 		ResolvedJSON: resolvedJSON,
 		SemanticHash: imported.Manifest.SemanticHash,
@@ -110,6 +138,15 @@ type PublishResult struct {
 // publish failed, and stops at SYNC_OBSERVED (never ACTIVE) unless the
 // observed semantic hash truly matches.
 //
+// The revision to publish as is computed internally via nextRevision, not
+// caller-supplied: a caller retrying after a failed publish (e.g. Bambu
+// Studio was open — decisions.md #4's expected "refuses, close Studio,
+// retry" flow) must land on the same revision number as the failed attempt,
+// since nothing was actually persisted for it yet. A caller-supplied number
+// that doesn't advance with reality risks a UNIQUE(profile_id, revision)
+// conflict on retry, or the reverse: two independent callers colliding on
+// the same number they both computed by hand.
+//
 // beforeInfo/afterInfo are the .info companion snapshots the caller reads
 // before staging and after the user has reopened Bambu Studio — this
 // function does not itself wait for a human, since that can't happen
@@ -120,12 +157,15 @@ func (s *Service) RebindAndPublish(
 	leaf *domain.RawProfile,
 	targetParentCandidates []string,
 	profileID string,
-	revision int,
 	beforeInfo, afterInfo reconcile.InfoFields,
 ) (*PublishResult, error) {
 	id, err := s.NewID()
 	if err != nil {
 		return nil, fmt.Errorf("service: new deployment id: %w", err)
+	}
+	revision, err := s.nextRevision(ctx, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("service: rebind and publish: %w", err)
 	}
 	dep := reconcile.New(id, profileID, revision)
 	result := &PublishResult{Deployment: dep}
@@ -199,7 +239,10 @@ func (s *Service) Rollback(ctx context.Context, profileID string, beforeInfo, af
 	if err != nil {
 		return nil, fmt.Errorf("service: rollback: new deployment id: %w", err)
 	}
-	newRevision := deployments[len(deployments)-1].Revision + 1
+	newRevision, err := s.nextRevision(ctx, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("service: rollback: %w", err)
+	}
 	dep := reconcile.New(id, profileID, newRevision)
 	result := &PublishResult{Deployment: dep}
 
@@ -233,11 +276,41 @@ func (s *Service) publishFlow(
 		return result, err
 	}
 
-	// Record what's about to be published as this deployment's revision, so
-	// Rollback can find and republish it later. targetProfile.Fields is
-	// exactly what Adapter.Publish will write to disk, so it's used as both
-	// SourceJSON and ResolvedJSON here — there's no separate "flattened"
-	// form beyond what's actually live.
+	staged, err := s.Adapter.Stage(ctx, targetProfile)
+	if err != nil {
+		return result, fmt.Errorf("service: stage: %w", err)
+	}
+	if err := dep.Advance(reconcile.StateStaged, staged); err != nil {
+		return result, err
+	}
+
+	published, err := s.Adapter.Publish(ctx, staged)
+	if err != nil {
+		if errors.Is(err, bambuadapter.ErrStudioRunning) {
+			// Not a failure state — SYNC_TIMEOUT/REJECTED_BY_STUDIO in the
+			// transition table only make sense once INSTALLED_LOCALLY has
+			// actually been reached (design.md §16), and this deployment
+			// hasn't gotten that far. decisions.md #4's expected flow is
+			// "close Studio, retry": dep just stays at STAGED, and a retry
+			// lands on this same revision since nothing was persisted yet.
+			return result, fmt.Errorf("service: publish: %w", err)
+		}
+		if advErr := dep.Advance(reconcile.StateRejectedByStudio, err.Error()); advErr != nil {
+			return result, fmt.Errorf("service: publish: %w (and could not record REJECTED_BY_STUDIO: %v)", err, advErr)
+		}
+		return result, fmt.Errorf("service: publish: %w", err)
+	}
+	if err := dep.Advance(reconcile.StateInstalledLocally, published); err != nil {
+		return result, err
+	}
+
+	// Only now record this revision as actually published, so Rollback can
+	// find and republish it later. targetProfile.Fields is exactly what
+	// Adapter.Publish just wrote to disk, so it's used as both SourceJSON
+	// and ResolvedJSON here — there's no separate "flattened" form beyond
+	// what's actually live. Writing this before Publish succeeded would
+	// reserve dep.Revision even on a failed attempt (e.g. Studio was
+	// running), permanently stranding a retry on a UNIQUE constraint.
 	fieldsJSON, err := jsonMarshal(targetProfile.Fields)
 	if err != nil {
 		return result, err
@@ -254,27 +327,6 @@ func (s *Service) publishFlow(
 		SemanticHash: hash,
 	}); err != nil {
 		return result, fmt.Errorf("service: record version: %w", err)
-	}
-
-	staged, err := s.Adapter.Stage(ctx, targetProfile)
-	if err != nil {
-		return result, fmt.Errorf("service: stage: %w", err)
-	}
-	if err := dep.Advance(reconcile.StateStaged, staged); err != nil {
-		return result, err
-	}
-
-	published, err := s.Adapter.Publish(ctx, staged)
-	if err != nil {
-		if errors.Is(err, bambuadapter.ErrStudioRunning) {
-			_ = dep.Advance(reconcile.StateSyncTimeout, "Bambu Studio was running at publish time")
-		} else {
-			_ = dep.Advance(reconcile.StateRejectedByStudio, err.Error())
-		}
-		return result, fmt.Errorf("service: publish: %w", err)
-	}
-	if err := dep.Advance(reconcile.StateInstalledLocally, published); err != nil {
-		return result, err
 	}
 
 	if !s.Detector.Observed(beforeInfo, afterInfo) {

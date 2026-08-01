@@ -47,7 +47,13 @@ func (s State) IsFailure() bool { return failureStates[s] }
 var transitions = map[State][]State{
 	StateDraft:             {StateValidated, StateDependencyMissing},
 	StateValidated:         {StateStaged, StateIdentityCollision},
-	StateStaged:            {StateInstalledLocally},
+	// StateRejectedByStudio from STAGED covers a Publish() failure that
+	// isn't "Studio was open" (decisions.md #4's ErrStudioRunning leaves a
+	// deployment at STAGED entirely, since that's not a failure — see
+	// internal/service.publishFlow) — e.g. a filesystem error writing into
+	// the live profile directory. There's no more specific failure state
+	// for "couldn't even get the file installed" than this one.
+	StateStaged: {StateInstalledLocally, StateRejectedByStudio},
 	StateInstalledLocally:  {StateObservedByStudio, StateRejectedByStudio, StateSyncTimeout},
 	StateObservedByStudio:  {StateSyncObserved, StateCloudModified},
 	StateSyncObserved:      {StateRoundTripVerified, StateSemanticMismatch, StateCloudModified},
