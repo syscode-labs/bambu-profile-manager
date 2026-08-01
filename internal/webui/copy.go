@@ -580,6 +580,19 @@ func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind 
 		http.Error(w, "copy: name, parent, and confirm_name are required", http.StatusBadRequest)
 		return
 	}
+	// Real bug found live: the "New profile name" field's suggested default
+	// doesn't vary per candidate, so if a profile with that exact name
+	// already existed on disk (e.g. left over from an earlier attempt with
+	// the same source+target), it legitimately appears as a same-family
+	// candidate too — picking that card while leaving the name field
+	// unedited submits parent == confirm_name, publishing a profile whose
+	// inherits points at itself. Bambu Studio silently drops profiles it
+	// can't resolve, which is what "the copy doesn't show up" turned out
+	// to actually be.
+	if confirmName == parent {
+		http.Error(w, "copy: the new profile name can't be the same as the parent it inherits from", http.StatusBadRequest)
+		return
+	}
 	// confirm_unverified only appears on the family-fallback page (a parent
 	// that exists but that Bambu's own catalog doesn't yet list as
 	// compatible with printer_canonical) — the checkbox being present and

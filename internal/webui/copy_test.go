@@ -252,6 +252,33 @@ func TestCopyPreviewOffersFamilyCandidatesWithDiffWhenNoVerifiedMatch(t *testing
 	}
 }
 
+// TestCopyPublishRejectsSelfReferencingInherits reproduces a real bug found
+// live: the "New profile name" field's suggested default doesn't depend on
+// which candidate is picked, so if a profile with that exact name already
+// exists (e.g. left over from an earlier attempt with the same
+// source+target), it legitimately shows up as a same-family candidate too.
+// Picking that card while leaving the name field unedited submits
+// parent == confirm_name — publishing a profile that inherits from itself,
+// which Bambu Studio silently drops rather than display. Must be rejected
+// server-side, not just relied on as an unlikely coincidence.
+func TestCopyPublishRejectsSelfReferencingInherits(t *testing.T) {
+	ts, _, _ := newTestServerWithLiveDir(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	resp, err := client.PostForm(ts.URL+"/copy/publish", map[string][]string{
+		"name":         {"Syscode - AmazonBasics ABS 0.6"},
+		"parent":       {"Same Name @P1S"},
+		"confirm_name": {"Same Name @P1S"},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/publish: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (self-referencing inherits must be rejected)", resp.StatusCode)
+	}
+}
+
 func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 	ts, liveDir, _ := newTestServerWithLiveDir(t)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
