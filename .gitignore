@@ -1,0 +1,4 @@
+/bambupm
+*.db
+*.db-*
+/data/

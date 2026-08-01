@@ -3,9 +3,10 @@
 Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 
 ## Phase 0 — Technical spike
-- [ ] Agent A: document real Bambu profile directory layout, `.json`/`.info` relationship, inheritance rules, sync transformations; produce first compatibility fixtures
-- [ ] Agent B: domain model, parser, recursive resolver, semantic normaliser/hash, golden + fuzz tests
-- Exit gate: `semantic(source) == semantic(reimport(export(source)))` for one real fixture. Stop if format can't be resolved reliably.
+- [x] Agent A: document real Bambu profile directory layout, `.json`/`.info` relationship, inheritance rules, sync transformations; produce first compatibility fixtures — done in `findings.md` + `testdata/fixtures/x1c-to-p1s/` (real chain: leaf → `Bambu ABS @BBL X1C` → `Bambu ABS @base` → `fdm_filament_abs` → `fdm_filament_common`)
+- [x] Agent B (partial): domain model (`internal/domain`), parser (`internal/parser`), recursive name-based resolver (`internal/resolver`), semantic normaliser/hash (`internal/normalize`), golden test against the real fixture chain — passing
+- [ ] Agent B (remaining): fuzz tests (malformed JSON, unicode, deep graphs, duplicate names, renamed parents)
+- Exit gate: `semantic(source) == semantic(reimport(export(source)))` for one real fixture — resolver+hash half proven (deterministic hash on real chain); full export/reimport round trip needs Phase 1's bundle work.
 
 ## Phase 1 — Portable core
 - [ ] Agent C: repository interfaces, SQLite impl + migrations, immutable versions, contract tests
