@@ -1,0 +1,177 @@
+package service_test
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
+	"github.com/syscod3/bambu-profile-manager/internal/parser"
+	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
+	"github.com/syscod3/bambu-profile-manager/internal/resolver"
+	"github.com/syscod3/bambu-profile-manager/internal/service"
+	"github.com/syscod3/bambu-profile-manager/internal/storage/sqlite"
+)
+
+func loadSet(t *testing.T, dir string) resolver.Set {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		t.Fatalf("glob %s: %v", dir, err)
+	}
+	set := resolver.Set{}
+	for _, m := range matches {
+		p, err := parser.Load(m)
+		if err != nil {
+			t.Fatalf("load %s: %v", m, err)
+		}
+		set[p.Name] = p
+	}
+	return set
+}
+
+func newID() (string, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
+}
+
+// TestAcceptanceFlowImportRebindPublishVerify exercises the design.md §22
+// primary acceptance test end to end, against real fixture data, entirely
+// within t.TempDir() — never the real local BambuStudio directory. Studio
+// recognition can't happen unattended (decisions.md #4), so this test
+// stands in for it with ManualDetector{Confirmed: true}, simulating "the
+// user reopened Studio and confirmed".
+func TestAcceptanceFlowImportRebindPublishVerify(t *testing.T) {
+	ctx := context.Background()
+	fixtureBase := filepath.Join("..", "..", "testdata", "fixtures", "x1c-to-p1s")
+
+	sourceSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source")) {
+		sourceSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		sourceSet[k] = v
+	}
+	targetSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "target-system")) {
+		targetSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		if _, ok := targetSet[k]; !ok {
+			targetSet[k] = v
+		}
+	}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	bambuDir := t.TempDir()
+	svc := &service.Service{
+		Repo:     repo,
+		Adapter:  &bambuadapter.LocalAdapter{Dir: bambuDir, IsStudioRunning: func() (bool, error) { return false, nil }},
+		Detector: reconcile.ManualDetector{Confirmed: true},
+		NewID:    newID,
+	}
+
+	const leafName = "Syscode - AmazonBasics ABS 0.6"
+
+	// 1. Export from the "source install" and 2. import into a clean DB —
+	// design.md §22 steps 4-6 ("remove access to the source directory;
+	// import the bundle into a clean database").
+	var bundleBuf bytes.Buffer
+	if _, err := svc.ExportBundle(ctx, &bundleBuf, sourceSet, leafName); err != nil {
+		t.Fatalf("ExportBundle: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(bundleBuf.Bytes()), int64(bundleBuf.Len()))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+	profile, version, err := svc.ImportBundle(ctx, zr)
+	if err != nil {
+		t.Fatalf("ImportBundle: %v", err)
+	}
+	if version.Revision != 1 {
+		t.Fatalf("first imported version has revision %d, want 1", version.Revision)
+	}
+
+	// 3. Rebind to P1S and 4. publish — steps 7-11.
+	leaf := sourceSet[leafName]
+	candidates := []string{"Bambu ABS @BBL P1S", "Bambu ABS @BBL P1S 0.4 nozzle"}
+	before := reconcile.InfoFields{"updated_time": "100", "setting_id": ""}
+	after := reconcile.InfoFields{"updated_time": "200", "setting_id": "PFUSnew"}
+
+	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf, candidates, profile.ID, version.Revision+1, before, after)
+	if err != nil {
+		t.Fatalf("RebindAndPublish: %v", err)
+	}
+
+	if result.Deployment.State != reconcile.StateActive {
+		t.Fatalf("final deployment state = %s, want ACTIVE (history: %+v)", result.Deployment.State, result.Deployment.History)
+	}
+	if !result.Deployment.IsRoundTripVerified() {
+		t.Fatal("Deployment.IsRoundTripVerified() = false at ACTIVE")
+	}
+
+	// The published file must actually exist under bambuDir (design.md §4:
+	// "do not report success merely because files were written" — but it
+	// must, at minimum, have been written).
+	obs, err := svc.Adapter.Observe(ctx, filepath.Join(bambuDir, leafName+".json"))
+	if err != nil {
+		t.Fatalf("Observe published file: %v", err)
+	}
+	if obs.Fields["inherits"] != "Bambu ABS @BBL P1S 0.4 nozzle" {
+		t.Fatalf("published profile inherits=%v, want the real (non-naive) P1S parent", obs.Fields["inherits"])
+	}
+}
+
+func TestRebindAndPublishStopsAtInstalledLocallyWithoutRecognition(t *testing.T) {
+	ctx := context.Background()
+	fixtureBase := filepath.Join("..", "..", "testdata", "fixtures", "x1c-to-p1s")
+	sourceSet := resolver.Set{}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source")) {
+		sourceSet[k] = v
+	}
+	for k, v := range loadSet(t, filepath.Join(fixtureBase, "source", "system")) {
+		sourceSet[k] = v
+	}
+	targetSet := loadSet(t, filepath.Join(fixtureBase, "target-system"))
+	for k, v := range sourceSet {
+		if _, ok := targetSet[k]; !ok {
+			targetSet[k] = v
+		}
+	}
+
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	svc := &service.Service{
+		Repo:     repo,
+		Adapter:  &bambuadapter.LocalAdapter{Dir: t.TempDir(), IsStudioRunning: func() (bool, error) { return false, nil }},
+		Detector: reconcile.ManualDetector{Confirmed: false}, // Studio hasn't "recognized" it yet
+		NewID:    newID,
+	}
+
+	leaf := sourceSet["Syscode - AmazonBasics ABS 0.6"]
+	result, err := svc.RebindAndPublish(ctx, sourceSet, targetSet, leaf,
+		[]string{"Bambu ABS @BBL P1S 0.4 nozzle"}, "profile-1", 1,
+		reconcile.InfoFields{}, reconcile.InfoFields{})
+	if err != nil {
+		t.Fatalf("RebindAndPublish: %v", err)
+	}
+	if result.Deployment.State != reconcile.StateInstalledLocally {
+		t.Fatalf("state = %s, want INSTALLED_LOCALLY (must not advance past what's actually confirmed, decisions.md #6)", result.Deployment.State)
+	}
+}

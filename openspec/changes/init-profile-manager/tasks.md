@@ -34,4 +34,5 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 - PostgreSQL adapter, Google Sheets projection, OrcaSlicer support, experimental Bambu Cloud adapter, multi-instance deployment
 
 ## Primary Acceptance Test (design.md §22, fixture swapped per decisions.md #8)
-- [ ] "Syscode - AmazonBasics ABS 0.6" @ X1C → P1S: full discover→export→import→rebind→publish→sync→verify→slice loop, `expected semantic profile == post-sync semantic profile`
+- [x] "Syscode - AmazonBasics ABS 0.6" @ X1C → P1S: export→import→rebind→publish→verify loop proven end-to-end in `internal/service/service_test.go` (`TestAcceptanceFlowImportRebindPublishVerify`), against real fixture data, culminating in `ROUND_TRIP_VERIFIED`/`ACTIVE`. `internal/service` wires storage→bundle→rebind→bambuadapter→reconcile together; `cmd/bambupm` exposes the safe/reversible half (`scan`, `resolve`) as a CLI.
+- [ ] **Not yet done, and can't be done unattended**: the real thing against live Bambu Studio — Studio recognition (`OBSERVED_BY_STUDIO`) and sync observation are simulated here via `reconcile.ManualDetector{Confirmed: true}`, standing in for "the user reopened Studio and confirmed". Slicing a reference model (design.md §4.8) also isn't wired up — needs the `--slice`/`--load-settings` CLI spike flagged in findings.md.
