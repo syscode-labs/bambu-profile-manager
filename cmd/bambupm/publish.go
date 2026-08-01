@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,9 +10,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
-	"github.com/syscod3/bambu-profile-manager/internal/domain"
 	"github.com/syscod3/bambu-profile-manager/internal/rebind"
 	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
+	"github.com/syscod3/bambu-profile-manager/internal/resolver"
 	"github.com/syscod3/bambu-profile-manager/internal/service"
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
 	"github.com/syscod3/bambu-profile-manager/internal/storage/sqlite"
@@ -24,29 +23,6 @@ import (
 // see them.
 func defaultBackupsDir(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "backups")
-}
-
-// targetProfileFromVersion reconstructs the RawProfile that was actually
-// published from a stored ProfileVersion's ResolvedJSON. Its Name MUST come
-// from the stored fields, not from the storage.Profile row's Name: a rebind
-// published under a --target-name publishes a DIFFERENT filename than the
-// source profile it started from (RebindAndPublish's targetName override).
-// Using the Profile row's name here once pointed at the SOURCE profile's
-// real, pre-existing .info file — which already has a setting_id from
-// ordinary use — producing a false-positive "Studio recognized it" on every
-// check, exactly what decisions.md #6 forbids. (Found by running the real
-// CLI against a live Bambu Studio directory: the reported ACTIVE state
-// didn't match the target profile's .info file, which didn't exist.)
-func targetProfileFromVersion(resolvedJSON []byte) (*domain.RawProfile, error) {
-	var fields map[string]any
-	if err := json.Unmarshal(resolvedJSON, &fields); err != nil {
-		return nil, fmt.Errorf("decode stored version: %w", err)
-	}
-	name, _ := fields["name"].(string)
-	if name == "" {
-		return nil, fmt.Errorf("stored version has no name field")
-	}
-	return &domain.RawProfile{Name: name, Fields: fields}, nil
 }
 
 func newUUID() (string, error) {
@@ -72,7 +48,7 @@ func cmdPublish(args []string) {
 		os.Exit(2)
 	}
 
-	set, err := loadDirs(append([]string{userDir}, systemDirs...))
+	set, err := resolver.LoadDirs(append([]string{userDir}, systemDirs...))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "publish:", err)
 		os.Exit(1)
@@ -194,7 +170,7 @@ func cmdCheckRecognition(args []string) {
 		fmt.Fprintf(os.Stderr, "check-recognition: no stored version for revision %d\n", dep.Revision)
 		os.Exit(1)
 	}
-	targetProfile, err := targetProfileFromVersion(resolvedJSON)
+	targetProfile, err := service.TargetProfileFromVersion(resolvedJSON)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "check-recognition:", err)
 		os.Exit(1)
@@ -254,7 +230,7 @@ func cmdCopy(args []string) {
 		os.Exit(2)
 	}
 
-	set, err := loadDirs(append([]string{userDir}, systemDirs...))
+	set, err := resolver.LoadDirs(append([]string{userDir}, systemDirs...))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "copy:", err)
 		os.Exit(1)

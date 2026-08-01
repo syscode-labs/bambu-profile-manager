@@ -9,8 +9,11 @@ package resolver
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/syscod3/bambu-profile-manager/internal/domain"
+	"github.com/syscod3/bambu-profile-manager/internal/parser"
 )
 
 var (
@@ -100,4 +103,29 @@ func RootAncestorName(set Set, leaf *domain.RawProfile) (string, error) {
 		}
 		cur = parent
 	}
+}
+
+// LoadDirs scans every *.json file directly under each dir (non-recursive,
+// matching bambuadapter.Discover) into one Set keyed by name. Shared by
+// cmd/bambupm and internal/webui so both build a Set from the same real
+// Bambu Studio directories the same way.
+func LoadDirs(dirs []string) (Set, error) {
+	set := Set{}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("resolver: load dirs: read %s: %w", dir, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+				continue
+			}
+			p, err := parser.Load(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			set[p.Name] = p
+		}
+	}
+	return set, nil
 }

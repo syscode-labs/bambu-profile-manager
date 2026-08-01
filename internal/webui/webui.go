@@ -22,6 +22,13 @@ import (
 
 type Server struct {
 	Svc *service.Service
+	// UserDir/SystemDirs let the "copy to another printer" and backups
+	// pages scan/act on the real Bambu Studio directories directly,
+	// separately from Svc.Adapter.Dir (same value in production, but kept
+	// distinct so tests can point Svc at a temp dir without this Server
+	// needing to know about it).
+	UserDir    string
+	SystemDirs []string
 }
 
 func (s *Server) Routes() http.Handler {
@@ -31,13 +38,24 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /profiles/{id}/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /import", s.handleImportForm)
 	mux.HandleFunc("POST /import", s.handleImport)
+	mux.HandleFunc("GET /copy", s.handleCopyForm)
+	mux.HandleFunc("POST /copy/preview", s.handleCopyPreview)
+	mux.HandleFunc("POST /copy/publish", s.handleCopyPublish)
+	mux.HandleFunc("GET /deployments/{id}", s.handleDeploymentDetail)
+	mux.HandleFunc("POST /deployments/{id}/check", s.handleCheckRecognition)
+	mux.HandleFunc("GET /backups", s.handleBackupsList)
+	mux.HandleFunc("POST /backups/{name}/restore", s.handleBackupRestore)
 	return mux
 }
 
 var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html>
 <html><head><title>Bambu Profile Manager</title></head><body>
 <h1>Profiles</h1>
-<p><a href="/import">Import a .profilepack bundle</a></p>
+<p>
+<a href="/import">Import a .profilepack bundle</a> &middot;
+<a href="/copy">Copy to another printer</a> &middot;
+<a href="/backups">Backups</a>
+</p>
 <ul>
 {{range .}}<li><a href="/profiles/{{.ID}}">{{.Name}}</a></li>{{else}}<li>No profiles yet.</li>{{end}}
 </ul>

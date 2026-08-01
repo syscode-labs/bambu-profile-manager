@@ -11,10 +11,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
-	"github.com/syscod3/bambu-profile-manager/internal/parser"
+	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
 	"github.com/syscod3/bambu-profile-manager/internal/resolver"
 	"github.com/syscod3/bambu-profile-manager/internal/service"
 	"github.com/syscod3/bambu-profile-manager/internal/storage/sqlite"
@@ -72,9 +71,10 @@ Usage:
       (flattened) fields as JSON. --dir may be passed more than once to
       search several directories (e.g. user + system profile dirs).
 
-  bambupm serve --db <path> --addr :8080
-      Start the local web UI (list/import/view profiles). --db defaults to
-      bambupm.db in the current directory.
+  bambupm serve --db <path> --addr :8080 [--user-dir <dir> --system-dir <dir> [...]] [--backups-dir <dir>]
+      Start the local web UI. List/detail/import always work. Pass
+      --user-dir (and --system-dir for target-parent matching) to also
+      enable the Copy-to-another-printer and Backups pages.
 
   bambupm publish --db <path> --user-dir <dir> --system-dir <dir> [...]
                   --name "<profile name>" --target <candidate> [...]
@@ -133,7 +133,7 @@ func cmdResolve(args []string) {
 		os.Exit(2)
 	}
 
-	set, err := loadDirs(dirs)
+	set, err := resolver.LoadDirs(dirs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "resolve:", err)
 		os.Exit(1)
@@ -167,6 +167,12 @@ func cmdServe(args []string) {
 	if addr == "" {
 		addr = ":8080"
 	}
+	userDir := flagValue(args, "--user-dir")
+	systemDirs := flagValues(args, "--system-dir")
+	backupsDir := flagValue(args, "--backups-dir")
+	if backupsDir == "" {
+		backupsDir = defaultBackupsDir(dbPath)
+	}
 
 	repo, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -175,35 +181,22 @@ func cmdServe(args []string) {
 	}
 	defer repo.Close()
 
-	srv := &webui.Server{Svc: &service.Service{Repo: repo}}
+	svc := &service.Service{Repo: repo, NewID: newUUID}
+	if userDir != "" {
+		svc.Adapter = &bambuadapter.LocalAdapter{Dir: userDir}
+		svc.Detector = reconcile.RewriteDetector{}
+		svc.BackupsDir = backupsDir
+	}
+	srv := &webui.Server{Svc: svc, UserDir: userDir, SystemDirs: systemDirs}
+
 	fmt.Fprintf(os.Stderr, "bambupm web UI listening on %s (db: %s)\n", addr, dbPath)
+	if userDir == "" {
+		fmt.Fprintln(os.Stderr, "note: --user-dir not set — list/detail/import work, but Copy/Backups pages need it")
+	}
 	if err := http.ListenAndServe(addr, srv.Routes()); err != nil {
 		fmt.Fprintln(os.Stderr, "serve:", err)
 		os.Exit(1)
 	}
-}
-
-// loadDirs scans every *.json file directly under each dir (non-recursive,
-// matching bambuadapter.Discover) into one resolver.Set keyed by name.
-func loadDirs(dirs []string) (resolver.Set, error) {
-	set := resolver.Set{}
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", dir, err)
-		}
-		for _, e := range entries {
-			if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-				continue
-			}
-			p, err := parser.Load(filepath.Join(dir, e.Name()))
-			if err != nil {
-				continue
-			}
-			set[p.Name] = p
-		}
-	}
-	return set, nil
 }
 
 func flagValue(args []string, name string) string {

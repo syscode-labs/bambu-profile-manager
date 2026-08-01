@@ -1,6 +1,10 @@
-package main
+package service_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/syscod3/bambu-profile-manager/internal/service"
+)
 
 // TestTargetProfileFromVersionUsesStoredNameNotProfileRow guards against a
 // real bug found running check-recognition against a live Bambu Studio
@@ -12,9 +16,9 @@ import "testing"
 // ACTIVE state.
 func TestTargetProfileFromVersionUsesStoredNameNotProfileRow(t *testing.T) {
 	resolvedJSON := []byte(`{"name":"Renamed Target Profile","filament_type":"ABS"}`)
-	got, err := targetProfileFromVersion(resolvedJSON)
+	got, err := service.TargetProfileFromVersion(resolvedJSON)
 	if err != nil {
-		t.Fatalf("targetProfileFromVersion: %v", err)
+		t.Fatalf("TargetProfileFromVersion: %v", err)
 	}
 	if got.Name != "Renamed Target Profile" {
 		t.Fatalf("Name = %q, want %q (the source profile's name must never leak in here)", got.Name, "Renamed Target Profile")
@@ -22,7 +26,7 @@ func TestTargetProfileFromVersionUsesStoredNameNotProfileRow(t *testing.T) {
 }
 
 func TestTargetProfileFromVersionRejectsMissingName(t *testing.T) {
-	if _, err := targetProfileFromVersion([]byte(`{"filament_type":"ABS"}`)); err == nil {
-		t.Fatal("targetProfileFromVersion accepted JSON with no name field, want an error")
+	if _, err := service.TargetProfileFromVersion([]byte(`{"filament_type":"ABS"}`)); err == nil {
+		t.Fatal("TargetProfileFromVersion accepted JSON with no name field, want an error")
 	}
 }
