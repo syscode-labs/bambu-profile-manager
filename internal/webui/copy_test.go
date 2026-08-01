@@ -129,7 +129,7 @@ func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 		t.Fatalf("POST /copy/publish status = %d, want 200", publishResp.StatusCode)
 	}
 	publishBody, _ := io.ReadAll(publishResp.Body)
-	if !strings.Contains(string(publishBody), "<h1>INSTALLED_LOCALLY</h1>") {
+	if !strings.Contains(string(publishBody), ">INSTALLED_LOCALLY<") {
 		t.Fatalf("publish result's final state is not INSTALLED_LOCALLY (no .info exists yet for a brand-new profile, so recognition can't have happened): %s", publishBody)
 	}
 	if !strings.Contains(string(publishBody), "Backup taken") {

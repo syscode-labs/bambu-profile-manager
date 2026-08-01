@@ -32,32 +32,38 @@ func (s *Server) studioWarning() template.HTML {
 	}
 	running, err := checker()
 	if err != nil {
-		return template.HTML(`<div style="background:#fff3cd;border:1px solid #cc9a06;padding:0.75em;margin-bottom:1em">` +
-			`&#9888; Could not determine whether Bambu Studio is running (` + template.HTMLEscapeString(err.Error()) + `). ` +
-			`Publishing will refuse on its own if it turns out to be open.</div>`)
+		return template.HTML(`<div class="flex items-start gap-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-sm">` +
+			`<span>&#9888;</span><div><p class="font-medium">Could not determine whether Bambu Studio is running</p>` +
+			`<p class="text-amber-700/80">` + template.HTMLEscapeString(err.Error()) + `. Publishing will refuse on its own if it turns out to be open.</p></div></div>`)
 	}
 	if running {
-		return template.HTML(`<div style="background:#f8d7da;border:1px solid #dc3545;padding:0.75em;margin-bottom:1em">` +
-			`<strong>&#9888; Bambu Studio appears to be running.</strong> Publishing requires it closed first. Close Studio, then continue.</div>`)
+		return template.HTML(`<div class="flex items-start gap-3 bg-red-50 border border-red-200 text-red-800 rounded-xl px-4 py-3 text-sm">` +
+			`<span>&#9888;</span><div><p class="font-medium">Bambu Studio appears to be running</p>` +
+			`<p class="text-red-700/80">Publishing requires it closed first. Close Studio, then continue.</p></div></div>`)
 	}
 	return ""
 }
 
-var copyFormTmpl = template.Must(template.New("copyForm").Parse(`<!doctype html>
-<html><head><title>Copy to another printer</title></head><body>
-<p><a href="/">&larr; All profiles</a></p>
-{{.Warning}}
-<h1>Copy a filament profile to another printer</h1>
-<form method="post" action="/copy/preview">
-<p>Profile:
-<select name="name" required>
-{{range .Names}}<option value="{{.}}">{{.}}</option>{{end}}
-</select></p>
-<p>Target printer (e.g. "P1S" or "P1S 0.4" to also pin the nozzle):
-<input type="text" name="printer_token" required></p>
-<button type="submit">Find match</button>
+var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+<form method="post" action="/copy/preview" class="space-y-4">
+  <div class="grid grid-cols-2 gap-4">
+    <label class="block">
+      <span class="text-xs font-medium text-zinc-500 mb-1 block">Profile</span>
+      <select name="name" required class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+      {{range .Names}}<option value="{{.}}">{{.}}</option>{{end}}
+      </select>
+    </label>
+    <label class="block">
+      <span class="text-xs font-medium text-zinc-500 mb-1 block">Target printer (e.g. "P1S" or "P1S 0.4" to pin the nozzle)</span>
+      <input type="text" name="printer_token" required placeholder="P1S 0.4"
+        class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+    </label>
+  </div>
+  <button type="submit" class="px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition">Find match</button>
 </form>
-</body></html>`))
+</section>
+`))
 
 func (s *Server) handleCopyForm(w http.ResponseWriter, r *http.Request) {
 	set, err := resolver.LoadDirs([]string{s.UserDir})
@@ -69,41 +75,59 @@ func (s *Server) handleCopyForm(w http.ResponseWriter, r *http.Request) {
 	for name := range set {
 		names = append(names, name)
 	}
-	data := struct {
-		Names   []string
-		Warning template.HTML
-	}{Names: names, Warning: s.studioWarning()}
-	renderOrError(w, copyFormTmpl, data)
+	data := struct{ Names []string }{Names: names}
+	renderPage(w, copyFormTmpl, data, "Copy", "Copy a filament profile to another printer", "Rebind without touching dependency chains yourself.", "copy", s.studioWarning())
 }
 
-var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`<!doctype html>
-<html><head><title>Copy preview</title></head><body>
-<p><a href="/copy">&larr; Start over</a></p>
-{{.Warning}}
-<h1>Copy preview: {{.Name}} &rarr; {{.PrinterToken}}</h1>
+var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
+<p><a href="/copy" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; Start over</a></p>
 {{if not .Candidates}}
-<p>No matching parent found under "{{.PrinterToken}}" for this profile's material. Nothing safe to auto-map.</p>
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
+  <p class="text-sm text-zinc-500">No matching parent found under "{{.PrinterToken}}" for this profile's material. Nothing safe to auto-map.</p>
+</section>
 {{else if gt (len .Candidates) 1}}
-<p>{{len .Candidates}} plausible parents found — pick one, this tool won't guess:</p>
-{{range .Candidates}}
-<form method="post" action="/copy/publish" style="margin-bottom:1em">
-<input type="hidden" name="name" value="{{$.Name}}">
-<input type="hidden" name="parent" value="{{.}}">
-<p><strong>{{.}}</strong></p>
-<p>New profile name: <input type="text" name="confirm_name" value="{{$.Name}} @{{$.PrinterToken}}" required></p>
-<button type="submit">Publish with this parent</button>
-</form>
-{{end}}
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <p class="text-sm text-zinc-500">{{len .Candidates}} plausible parents found &mdash; pick one, this tool won't guess:</p>
+  {{$name := .Name}}{{$token := .PrinterToken}}
+  {{range .Candidates}}
+  <form method="post" action="/copy/publish" class="border border-zinc-200 rounded-xl p-4 space-y-3">
+    <input type="hidden" name="name" value="{{$name}}">
+    <input type="hidden" name="parent" value="{{.}}">
+    <p class="text-sm font-medium">{{.}}</p>
+    <label class="block">
+      <span class="text-xs font-medium text-zinc-500 mb-1 block">New profile name</span>
+      <input type="text" name="confirm_name" value="{{$name}} @{{$token}}" required
+        class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+    </label>
+    <button type="submit" class="px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition">Publish with this parent</button>
+  </form>
+  {{end}}
+</section>
 {{else}}
-<p>Match: <strong>{{index .Candidates 0}}</strong></p>
-<form method="post" action="/copy/publish">
-<input type="hidden" name="name" value="{{.Name}}">
-<input type="hidden" name="parent" value="{{index .Candidates 0}}">
-<p>New profile name: <input type="text" name="confirm_name" value="{{.Name}} @{{.PrinterToken}}" required></p>
-<button type="submit">Publish</button>
-</form>
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <div class="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
+    <div class="flex items-center gap-3">
+      <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+      <div>
+        <p class="text-sm font-medium text-emerald-900">{{index .Candidates 0}}</p>
+        <p class="text-xs text-emerald-700">Single unambiguous match</p>
+      </div>
+    </div>
+    <span class="text-xs font-medium px-2 py-1 rounded-full bg-emerald-600 text-white">auto-matched</span>
+  </div>
+  <form method="post" action="/copy/publish" class="space-y-4">
+    <input type="hidden" name="name" value="{{.Name}}">
+    <input type="hidden" name="parent" value="{{index .Candidates 0}}">
+    <label class="block">
+      <span class="text-xs font-medium text-zinc-500 mb-1 block">New profile name</span>
+      <input type="text" name="confirm_name" value="{{.Name}} @{{.PrinterToken}}" required
+        class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+    </label>
+    <button type="submit" class="px-5 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 transition shadow-sm shadow-emerald-600/30">Publish</button>
+  </form>
+</section>
 {{end}}
-</body></html>`))
+`))
 
 func (s *Server) handleCopyPreview(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
@@ -137,31 +161,37 @@ func (s *Server) handleCopyPreview(w http.ResponseWriter, r *http.Request) {
 		Name         string
 		PrinterToken string
 		Candidates   []string
-		Warning      template.HTML
-	}{Name: name, PrinterToken: printerToken, Candidates: candidates, Warning: s.studioWarning()}
-	renderOrError(w, copyPreviewTmpl, data)
+	}{Name: name, PrinterToken: printerToken, Candidates: candidates}
+	renderPage(w, copyPreviewTmpl, data, "Copy preview", "Copy preview: "+name, "&rarr; "+printerToken, "copy", s.studioWarning())
 }
 
-var studioBlockedTmpl = template.Must(template.New("studioBlocked").Parse(`<!doctype html>
-<html><head><title>Bambu Studio is open</title></head><body>
-<p><a href="/copy">&larr; Back</a></p>
-<div style="background:#f8d7da;border:1px solid #dc3545;padding:1em">
-<h1>&#9888; Publish refused: Bambu Studio is running</h1>
-<p>Publishing writes directly into Bambu Studio's profile directory and needs it closed first. Close Bambu Studio, then submit again — nothing was written.</p>
-</div>
-</body></html>`))
+var copyResultTmpl = template.Must(template.New("copyResult").Parse(`
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <div class="flex items-center gap-2">
+    <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">{{.Deployment.State}}</span>
+  </div>
+  <p class="text-sm text-zinc-500">Parent: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Parent}}</code> &middot; Name: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Name}}</code></p>
+  {{if .Snapshot}}<p class="text-sm text-zinc-500">Backup taken: <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Snapshot}}</code></p>{{end}}
+  <ol class="relative border-l border-zinc-200 ml-2 space-y-3">
+  {{range .Deployment.History}}<li class="ml-4">
+    <span class="absolute -left-[5px] w-2.5 h-2.5 rounded-full bg-emerald-500 ring-4 ring-white"></span>
+    <p class="text-sm font-medium">{{.From}} &rarr; {{.To}}</p>
+    {{if .Reason}}<p class="text-xs text-zinc-400">{{.Reason}}</p>{{end}}
+  </li>{{end}}
+  </ol>
+  <a href="/deployments/{{.Deployment.ID}}" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Deployment detail &rarr;</a>
+</section>
+`))
 
-var copyResultTmpl = template.Must(template.New("copyResult").Parse(`<!doctype html>
-<html><head><title>Copy result</title></head><body>
-<p><a href="/">&larr; All profiles</a></p>
-<h1>{{.Deployment.State}}</h1>
-<p>Parent: <code>{{.Parent}}</code> &middot; Name: <code>{{.Name}}</code></p>
-{{if .Snapshot}}<p>Backup taken: <code>{{.Snapshot}}</code></p>{{end}}
-<ul>
-{{range .Deployment.History}}<li>{{.From}} &rarr; {{.To}}{{if .Reason}} ({{.Reason}}){{end}}</li>{{end}}
-</ul>
-<p><a href="/deployments/{{.Deployment.ID}}">Deployment detail &rarr;</a></p>
-</body></html>`))
+var studioBlockedTmpl = template.Must(template.New("studioBlocked").Parse(`
+<div class="flex items-start gap-3 bg-red-50 border border-red-200 text-red-800 rounded-xl px-4 py-3 text-sm">
+  <span>&#9888;</span>
+  <div>
+    <p class="font-medium">Publish refused: Bambu Studio is running</p>
+    <p class="text-red-700/80">Publishing writes directly into Bambu Studio's profile directory and needs it closed first. Close Bambu Studio, then submit again &mdash; nothing was written.</p>
+  </div>
+</div>
+`))
 
 func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
@@ -200,42 +230,54 @@ func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
 	result, err := s.Svc.RebindAndPublish(ctx, set, set, leaf, []string{parent}, profile.ID, confirmName,
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if errors.Is(err, bambuadapter.ErrStudioRunning) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		var contentBuf bytes.Buffer
+		studioBlockedTmpl.Execute(&contentBuf, nil)
+		shellData := struct {
+			Title, HeaderTitle, HeaderSubtitle, Active string
+			Warning, Content                           template.HTML
+		}{Title: "Publish blocked", HeaderTitle: "Publish blocked", Active: "copy", Content: template.HTML(contentBuf.String())}
 		var buf bytes.Buffer
-		if tmplErr := studioBlockedTmpl.Execute(&buf, nil); tmplErr == nil {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			buf.WriteTo(w)
-			return
-		}
+		shellTmpl.Execute(&buf, shellData)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		buf.WriteTo(w)
+		return
 	}
 	if err != nil {
 		http.Error(w, "copy: "+err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
 
-	renderOrError(w, copyResultTmpl, struct {
+	data := struct {
 		Deployment any
 		Parent     string
 		Name       string
 		Snapshot   string
-	}{Deployment: result.Deployment, Parent: parent, Name: confirmName, Snapshot: result.Snapshot})
+	}{Deployment: result.Deployment, Parent: parent, Name: confirmName, Snapshot: result.Snapshot}
+	renderPage(w, copyResultTmpl, data, "Copy result", "Copy result", "", "copy", "")
 }
 
-var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Parse(`<!doctype html>
-<html><head><title>Deployment {{.Deployment.ID}}</title></head><body>
-<p><a href="/">&larr; All profiles</a></p>
-<h1>Deployment {{.Deployment.ID}}</h1>
-<p>State: <strong>{{.Deployment.State}}</strong> &middot; Revision {{.Deployment.Revision}}</p>
-<ul>
-{{range .Deployment.History}}<li>{{.At.Format "2006-01-02 15:04:05"}}: {{.From}} &rarr; {{.To}}{{if .Reason}} ({{.Reason}}){{end}}</li>{{end}}
-</ul>
-{{if eq (print .Deployment.State) "INSTALLED_LOCALLY"}}
-<form method="post" action="/deployments/{{.Deployment.ID}}/check">
-<p>Reopen Bambu Studio, select the profile, and Save it once (that's the confirmed trigger — reopening/selecting/slicing alone don't bump the metadata Studio uses). Then:</p>
-<button type="submit">Check recognition</button>
-</form>
-{{end}}
-</body></html>`))
+var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Parse(`
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <div class="flex items-center justify-between">
+    <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">{{.Deployment.State}}</span>
+    <span class="text-xs text-zinc-400">Revision {{.Deployment.Revision}}</span>
+  </div>
+  <ol class="relative border-l border-zinc-200 ml-2 space-y-3">
+  {{range .Deployment.History}}<li class="ml-4">
+    <span class="absolute -left-[5px] w-2.5 h-2.5 rounded-full bg-emerald-500 ring-4 ring-white"></span>
+    <p class="text-sm font-medium">{{.At.Format "2006-01-02 15:04:05"}}: {{.From}} &rarr; {{.To}}</p>
+    {{if .Reason}}<p class="text-xs text-zinc-400 truncate">{{.Reason}}</p>{{end}}
+  </li>{{end}}
+  </ol>
+  {{if eq (print .Deployment.State) "INSTALLED_LOCALLY"}}
+  <form method="post" action="/deployments/{{.Deployment.ID}}/check" class="border-t border-zinc-100 pt-4">
+    <p class="text-sm text-zinc-500 mb-3">Reopen Bambu Studio, select the profile, and Save it once &mdash; the confirmed trigger (reopening/selecting/slicing alone don't bump the metadata Studio uses).</p>
+    <button type="submit" class="px-4 py-2 rounded-lg border border-zinc-300 text-sm font-medium hover:bg-zinc-50 transition">Check recognition</button>
+  </form>
+  {{end}}
+</section>
+`))
 
 func (s *Server) handleDeploymentDetail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -244,7 +286,8 @@ func (s *Server) handleDeploymentDetail(w http.ResponseWriter, r *http.Request) 
 		httpError(w, err)
 		return
 	}
-	renderOrError(w, deploymentDetailTmpl, struct{ Deployment any }{Deployment: dep})
+	data := struct{ Deployment any }{Deployment: dep}
+	renderPage(w, deploymentDetailTmpl, data, "Deployment", "Deployment "+id, "", "", "")
 }
 
 func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) {
@@ -297,22 +340,22 @@ func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, "/deployments/"+id, http.StatusSeeOther)
 }
 
-var backupsTmpl = template.Must(template.New("backups").Parse(`<!doctype html>
-<html><head><title>Backups</title></head><body>
-<p><a href="/">&larr; All profiles</a></p>
-{{.Warning}}
-<h1>Backups</h1>
-<p>Point-in-time snapshots taken automatically before every publish.</p>
-<ul>
+var backupsTmpl = template.Must(template.New("backups").Parse(`
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm divide-y divide-zinc-100">
 {{range .List}}
-<li>{{.At.Format "2006-01-02 15:04:05 MST"}} (<code>{{.Name}}</code>)
-<form method="post" action="/backups/{{.Name}}/restore" style="display:inline">
-<button type="submit" onclick="return confirm('Restore this snapshot? Overwrites files present in it, does not delete anything added since.')">Restore</button>
-</form>
-</li>
-{{else}}<li>No backups yet.</li>{{end}}
-</ul>
-</body></html>`))
+<div class="flex items-center justify-between px-5 py-3.5">
+  <div>
+    <p class="text-sm font-medium">{{.At.Format "2006-01-02 15:04:05 MST"}}</p>
+    <code class="text-xs text-zinc-400">{{.Name}}</code>
+  </div>
+  <form method="post" action="/backups/{{.Name}}/restore">
+    <button type="submit" onclick="return confirm('Restore this snapshot? Overwrites files present in it, does not delete anything added since.')"
+      class="px-3 py-1.5 rounded-lg border border-zinc-300 text-xs font-medium hover:bg-zinc-50 transition">Restore</button>
+  </form>
+</div>
+{{else}}<div class="text-center py-16 text-zinc-400"><p class="text-sm">No backups yet.</p></div>{{end}}
+</section>
+`))
 
 func (s *Server) handleBackupsList(w http.ResponseWriter, r *http.Request) {
 	list, err := s.Svc.ListBackups()
@@ -320,11 +363,8 @@ func (s *Server) handleBackupsList(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
-	data := struct {
-		List    any
-		Warning template.HTML
-	}{List: list, Warning: s.studioWarning()}
-	renderOrError(w, backupsTmpl, data)
+	data := struct{ List any }{List: list}
+	renderPage(w, backupsTmpl, data, "Backups", "Backups", "Point-in-time snapshots taken automatically before every publish.", "backups", s.studioWarning())
 }
 
 func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {

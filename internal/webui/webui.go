@@ -1,10 +1,10 @@
 // Package webui is the local web UI (design.md §18), server-rendered REST +
 // plain page reloads — no WebSocket, no client-side framework, per
 // decisions.md #7 ("ship the UI from Phase 1, defer cache/WebSocket infra
-// until real usage shows a need"). Pages are plain html/template, not
-// templ/HTMX: with page reloads instead of partial updates there's nothing
-// HTMX would add yet, so it's deferred along with the rest of the deferred
-// infra rather than added unused.
+// until real usage shows a need"). Styling is Tailwind (via CDN, see
+// shell.go) chosen over an Electron shell after comparing both as throwaway
+// POCs — kept it a single Go binary with plain page reloads rather than add
+// a Node.js/npm toolchain.
 package webui
 
 import (
@@ -48,18 +48,20 @@ func (s *Server) Routes() http.Handler {
 	return mux
 }
 
-var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html>
-<html><head><title>Bambu Profile Manager</title></head><body>
-<h1>Profiles</h1>
-<p>
-<a href="/import">Import a .profilepack bundle</a> &middot;
-<a href="/copy">Copy to another printer</a> &middot;
-<a href="/backups">Backups</a>
-</p>
-<ul>
-{{range .}}<li><a href="/profiles/{{.ID}}">{{.Name}}</a></li>{{else}}<li>No profiles yet.</li>{{end}}
-</ul>
-</body></html>`))
+var indexTmpl = template.Must(template.New("index").Parse(`
+{{if .}}
+<div class="bg-white rounded-2xl border border-zinc-200 shadow-sm divide-y divide-zinc-100">
+{{range .}}<a href="/profiles/{{.ID}}" class="flex items-center justify-between px-5 py-3.5 hover:bg-zinc-50 transition first:rounded-t-2xl last:rounded-b-2xl">
+  <span class="text-sm font-medium text-zinc-800">{{.Name}}</span>
+  <svg class="w-4 h-4 text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+</a>{{end}}
+</div>
+{{else}}
+<div class="text-center py-16 text-zinc-400">
+  <p class="text-sm">No profiles yet.</p>
+  <a href="/import" class="inline-block mt-3 text-sm font-medium text-emerald-600 hover:text-emerald-700">Import a bundle &rarr;</a>
+</div>
+{{end}}`))
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	profiles, err := s.Svc.Repo.Profiles().List(r.Context())
@@ -67,23 +69,30 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
-	renderOrError(w, indexTmpl, profiles)
+	renderPage(w, indexTmpl, profiles, "Profiles", "Profiles", "Everything bambupm knows about, by canonical name.", "profiles", "")
 }
 
-var profileTmpl = template.Must(template.New("profile").Parse(`<!doctype html>
-<html><head><title>{{.Profile.Name}}</title></head><body>
-<p><a href="/">&larr; All profiles</a></p>
-<h1>{{.Profile.Name}}</h1>
-<h2>Latest version</h2>
-<p>Revision {{.Latest.Revision}} &middot; semantic hash <code>{{.Latest.SemanticHash}}</code></p>
-<h3>Resolved (effective) profile</h3>
-<pre>{{.ResolvedJSON}}</pre>
-<h3>All revisions</h3>
-<ul>
-{{range .All}}<li>Revision {{.Revision}}: <code>{{.SemanticHash}}</code></li>{{end}}
-</ul>
-<p><a href="/profiles/{{.Profile.ID}}/deployments">Deployment history &rarr;</a></p>
-</body></html>`))
+var profileTmpl = template.Must(template.New("profile").Parse(`
+<p><a href="/" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; All profiles</a></p>
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-3">
+  <div class="flex items-center justify-between">
+    <h2 class="text-sm font-medium text-zinc-500">Latest version</h2>
+    <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-600">rev {{.Latest.Revision}}</span>
+  </div>
+  <p class="text-xs text-zinc-500">semantic hash <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Latest.SemanticHash}}</code></p>
+  <details class="text-sm">
+    <summary class="cursor-pointer text-zinc-500 hover:text-zinc-800">Resolved (effective) profile</summary>
+    <pre class="mt-2 bg-zinc-950 text-zinc-200 text-xs p-4 rounded-xl overflow-x-auto">{{.ResolvedJSON}}</pre>
+  </details>
+</section>
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
+  <h2 class="text-sm font-medium text-zinc-500 mb-3">All revisions</h2>
+  <ul class="space-y-1.5 text-sm">
+  {{range .All}}<li class="flex items-center justify-between"><span>Revision {{.Revision}}</span><code class="text-xs text-zinc-400">{{.SemanticHash}}</code></li>{{end}}
+  </ul>
+</section>
+<a href="/profiles/{{.Profile.ID}}/deployments" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Deployment history &rarr;</a>
+`))
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -111,20 +120,27 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		All          any
 		ResolvedJSON string
 	}{Profile: p, Latest: latest, All: all, ResolvedJSON: string(latest.ResolvedJSON)}
-	renderOrError(w, profileTmpl, data)
+	renderPage(w, profileTmpl, data, p.Name, p.Name, "", "profiles", "")
 }
 
-var deploymentsTmpl = template.Must(template.New("deployments").Parse(`<!doctype html>
-<html><head><title>Deployments: {{.Profile.Name}}</title></head><body>
-<p><a href="/profiles/{{.Profile.ID}}">&larr; {{.Profile.Name}}</a></p>
-<h1>Deployment history</h1>
+var deploymentsTmpl = template.Must(template.New("deployments").Parse(`
+<p><a href="/profiles/{{.Profile.ID}}" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; {{.Profile.Name}}</a></p>
 {{range .Deployments}}
-<h3>Revision {{.Revision}} &mdash; {{.State}}</h3>
-<ul>
-{{range .History}}<li>{{.At.Format "2006-01-02 15:04:05"}}: {{.From}} &rarr; {{.To}}{{if .Reason}} ({{.Reason}}){{end}}</li>{{end}}
-</ul>
-{{else}}<p>No deployments yet.</p>{{end}}
-</body></html>`))
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-medium text-zinc-500">Revision {{.Revision}}</h2>
+    <a href="/deployments/{{.ID}}" class="text-xs font-medium px-2.5 py-1 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-200">{{.State}}</a>
+  </div>
+  <ol class="relative border-l border-zinc-200 ml-2 space-y-3">
+  {{range .History}}<li class="ml-4">
+    <span class="absolute -left-[5px] w-2.5 h-2.5 rounded-full bg-emerald-500 ring-4 ring-white"></span>
+    <p class="text-sm font-medium">{{.From}} &rarr; {{.To}}</p>
+    {{if .Reason}}<p class="text-xs text-zinc-400">{{.Reason}}</p>{{end}}
+  </li>{{end}}
+  </ol>
+</section>
+{{else}}<div class="text-center py-16 text-zinc-400"><p class="text-sm">No deployments yet.</p></div>{{end}}
+`))
 
 func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -145,21 +161,24 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		Profile     any
 		Deployments any
 	}{Profile: p, Deployments: deployments}
-	renderOrError(w, deploymentsTmpl, data)
+	renderPage(w, deploymentsTmpl, data, "Deployments", "Deployment history: "+p.Name, "", "profiles", "")
 }
 
-var importFormTmpl = template.Must(template.New("import").Parse(`<!doctype html>
-<html><head><title>Import a bundle</title></head><body>
-<p><a href="/">&larr; All profiles</a></p>
-<h1>Import a .profilepack bundle</h1>
-<form method="post" action="/import" enctype="multipart/form-data">
-<input type="file" name="bundle" accept=".profilepack,.zip" required>
-<button type="submit">Import</button>
+var importFormTmpl = template.Must(template.New("import").Parse(`
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+<form method="post" action="/import" enctype="multipart/form-data" class="space-y-4">
+  <label class="block">
+    <span class="text-xs font-medium text-zinc-500 mb-1 block">.profilepack bundle</span>
+    <input type="file" name="bundle" accept=".profilepack,.zip" required
+      class="w-full text-sm rounded-lg border border-dashed border-zinc-300 px-3 py-6 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-zinc-900 file:text-white file:text-sm">
+  </label>
+  <button type="submit" class="px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition">Import</button>
 </form>
-</body></html>`))
+</section>
+`))
 
 func (s *Server) handleImportForm(w http.ResponseWriter, r *http.Request) {
-	renderOrError(w, importFormTmpl, nil)
+	renderPage(w, importFormTmpl, nil, "Import", "Import a bundle", "Bring a .profilepack exported elsewhere into this library.", "import", "")
 }
 
 func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
@@ -187,16 +206,6 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/profiles/"+profile.ID, http.StatusSeeOther)
-}
-
-func renderOrError(w http.ResponseWriter, tmpl *template.Template, data any) {
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		http.Error(w, "render: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	buf.WriteTo(w)
 }
 
 func httpError(w http.ResponseWriter, err error) {
