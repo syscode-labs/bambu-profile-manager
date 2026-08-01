@@ -46,6 +46,15 @@ func (s *Server) studioWarning() template.HTML {
 
 var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <div class="flex items-center gap-2 text-sm font-medium text-zinc-500">
+    <span class="w-5 h-5 rounded-full bg-zinc-900 text-white text-xs flex items-center justify-center shrink-0">1</span>
+    Choose a profile and target printer
+  </div>
+  <p class="text-xs text-zinc-500 -mt-2">
+    Pick a filament you already have, and the printer you want it usable under. bambupm looks for a parent profile
+    that matches both the same material (ABS, PLA, ...) and your target printer &mdash; the same lookup Bambu Studio
+    itself would need, done for you. Your settings (color, vendor, temps) carry over either way.
+  </p>
 <form method="post" action="/copy/preview" class="space-y-4">
   <div class="grid grid-cols-2 gap-4">
     <label class="block">
@@ -58,6 +67,7 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
       <span class="text-xs font-medium text-zinc-500 mb-1 block">Target printer (e.g. "P1S" or "P1S 0.4" to pin the nozzle)</span>
       <input type="text" name="printer_token" required placeholder="P1S 0.4"
         class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
+      <span class="text-xs text-zinc-400 mt-1 block">Just the printer works ("P1S"); add the nozzle size ("P1S 0.4") if that alone leaves more than one match.</span>
     </label>
   </div>
   <button type="submit" class="px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition">Find match</button>
@@ -87,7 +97,11 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
 </section>
 {{else if gt (len .Candidates) 1}}
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
-  <p class="text-sm text-zinc-500">{{len .Candidates}} plausible parents found &mdash; pick one, this tool won't guess:</p>
+  <div class="flex items-center gap-2 text-sm font-medium text-zinc-500">
+    <span class="w-5 h-5 rounded-full bg-zinc-900 text-white text-xs flex items-center justify-center shrink-0">2</span>
+    Pick a parent
+  </div>
+  <p class="text-sm text-zinc-500">{{len .Candidates}} profiles match both the material and "{{.PrinterToken}}" &mdash; this tool won't guess between them. Add more of the printer name (e.g. the nozzle size) on the previous step to narrow it to one, or just pick below.</p>
   {{$name := .Name}}{{$token := .PrinterToken}}
   {{range .Candidates}}
   <form method="post" action="/copy/publish" class="border border-zinc-200 rounded-xl p-4 space-y-3">
@@ -105,6 +119,10 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
 </section>
 {{else}}
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <div class="flex items-center gap-2 text-sm font-medium text-zinc-500">
+    <span class="w-5 h-5 rounded-full bg-zinc-900 text-white text-xs flex items-center justify-center shrink-0">2</span>
+    Confirm and publish
+  </div>
   <div class="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
     <div class="flex items-center gap-3">
       <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
@@ -258,6 +276,8 @@ func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
 }
 
 var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Parse(`
+<p class="text-sm text-zinc-500">A deployment only reaches <code class="bg-zinc-100 px-1 rounded">ACTIVE</code> after Bambu Studio has actually
+  confirmed it and the settings still match &mdash; not just because a file was written.</p>
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
   <div class="flex items-center justify-between">
     <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">{{.Deployment.State}}</span>
@@ -341,6 +361,7 @@ func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) 
 }
 
 var backupsTmpl = template.Must(template.New("backups").Parse(`
+<p class="text-sm text-zinc-500">Restoring overwrites files present in that snapshot but never deletes anything added since &mdash; safe to restore an old one without losing newer work.</p>
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm divide-y divide-zinc-100">
 {{range .List}}
 <div class="flex items-center justify-between px-5 py-3.5">

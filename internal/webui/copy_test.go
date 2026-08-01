@@ -1,6 +1,8 @@
 package webui_test
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
+	"github.com/syscod3/bambu-profile-manager/internal/domain"
 	"github.com/syscod3/bambu-profile-manager/internal/reconcile"
 	"github.com/syscod3/bambu-profile-manager/internal/service"
 	"github.com/syscod3/bambu-profile-manager/internal/storage/sqlite"
@@ -312,5 +315,59 @@ func TestStudioRunningWarningShownAndPublishBlocked(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(liveDir, "Blocked @P1S.json")); err == nil {
 		t.Fatal("file was published even though Studio was reported running")
+	}
+}
+
+// TestCompareRevisions proves /profiles/{id}/compare surfaces a real diff
+// between two stored revisions and hides fields that didn't change.
+func TestCompareRevisions(t *testing.T) {
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	svc := &service.Service{Repo: repo}
+	srv := &webui.Server{Svc: svc}
+	ts := httptest.NewServer(srv.Routes())
+	t.Cleanup(ts.Close)
+
+	ctx := context.Background()
+	profile, err := repo.Profiles().Create(ctx, "Compare Test")
+	if err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+	if _, err := repo.Versions().Create(ctx, domain.ProfileVersion{
+		ProfileID: profile.ID, Revision: 1,
+		SourceJSON: []byte(`{}`), ResolvedJSON: []byte(`{"nozzle_temperature":"250","name":"Compare Test"}`),
+		SemanticHash: "h1",
+	}); err != nil {
+		t.Fatalf("Create v1: %v", err)
+	}
+	if _, err := repo.Versions().Create(ctx, domain.ProfileVersion{
+		ProfileID: profile.ID, Revision: 2,
+		SourceJSON: []byte(`{}`), ResolvedJSON: []byte(`{"nozzle_temperature":"260","name":"Compare Test"}`),
+		SemanticHash: "h2",
+	}); err != nil {
+		t.Fatalf("Create v2: %v", err)
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/profiles/%s/compare?a=1&b=2", ts.URL, profile.ID))
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET compare status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "nozzle_temperature") {
+		t.Fatalf("compare page missing the changed field: %s", body)
+	}
+	if !strings.Contains(string(body), "250") || !strings.Contains(string(body), "260") {
+		t.Fatalf("compare page missing both revisions' values: %s", body)
+	}
+	if strings.Contains(string(body), ">name<") {
+		t.Fatalf("compare page shows an unchanged field (name), want it hidden: %s", body)
 	}
 }

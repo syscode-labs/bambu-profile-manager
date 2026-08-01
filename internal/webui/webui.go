@@ -10,11 +10,13 @@ package webui
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/syscod3/bambu-profile-manager/internal/service"
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
@@ -35,6 +37,7 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /profiles/{id}", s.handleProfile)
+	mux.HandleFunc("GET /profiles/{id}/compare", s.handleCompare)
 	mux.HandleFunc("GET /profiles/{id}/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /import", s.handleImportForm)
 	mux.HandleFunc("POST /import", s.handleImport)
@@ -49,19 +52,48 @@ func (s *Server) Routes() http.Handler {
 }
 
 var indexTmpl = template.Must(template.New("index").Parse(`
-{{if .}}
-<div class="bg-white rounded-2xl border border-zinc-200 shadow-sm divide-y divide-zinc-100">
-{{range .}}<a href="/profiles/{{.ID}}" class="flex items-center justify-between px-5 py-3.5 hover:bg-zinc-50 transition first:rounded-t-2xl last:rounded-b-2xl">
-  <span class="text-sm font-medium text-zinc-800">{{.Name}}</span>
-  <svg class="w-4 h-4 text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-</a>{{end}}
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
+  <p class="text-sm text-zinc-600 leading-relaxed">
+    bambupm tracks your Bambu Studio filament profiles, lets you <strong>copy one to another printer</strong> without
+    touching dependency chains by hand, and <strong>verifies</strong> Bambu Studio actually recognized the result
+    before calling it done &mdash; instead of assuming a file write means success.
+  </p>
+</section>
+
+<div class="grid grid-cols-3 gap-4">
+  <a href="/copy" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
+    <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/></svg>
+    <p class="text-sm font-semibold group-hover:text-emerald-700">Copy to another printer</p>
+    <p class="text-xs text-zinc-500 mt-1">Pick a profile and a target printer &mdash; the parent chain is matched for you.</p>
+  </a>
+  <a href="/import" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
+    <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
+    <p class="text-sm font-semibold group-hover:text-emerald-700">Import a bundle</p>
+    <p class="text-xs text-zinc-500 mt-1">Bring in a .profilepack exported elsewhere, dependencies and all.</p>
+  </a>
+  <a href="/backups" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
+    <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+    <p class="text-sm font-semibold group-hover:text-emerald-700">Backups</p>
+    <p class="text-xs text-zinc-500 mt-1">Every publish snapshots your directory first &mdash; restore any of them.</p>
+  </a>
 </div>
-{{else}}
-<div class="text-center py-16 text-zinc-400">
-  <p class="text-sm">No profiles yet.</p>
-  <a href="/import" class="inline-block mt-3 text-sm font-medium text-emerald-600 hover:text-emerald-700">Import a bundle &rarr;</a>
+
+<div>
+  <h2 class="text-sm font-medium text-zinc-500 mb-3">Tracked profiles</h2>
+  {{if .}}
+  <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm divide-y divide-zinc-100">
+  {{range .}}<a href="/profiles/{{.ID}}" class="flex items-center justify-between px-5 py-3.5 hover:bg-zinc-50 transition first:rounded-t-2xl last:rounded-b-2xl">
+    <span class="text-sm font-medium text-zinc-800">{{.Name}}</span>
+    <svg class="w-4 h-4 text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+  </a>{{end}}
+  </div>
+  {{else}}
+  <div class="text-center py-12 text-zinc-400 bg-white rounded-2xl border border-dashed border-zinc-200">
+    <p class="text-sm">Nothing tracked yet &mdash; a profile appears here after you Import a bundle or Copy one to another printer.</p>
+  </div>
+  {{end}}
 </div>
-{{end}}`))
+`))
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	profiles, err := s.Svc.Repo.Profiles().List(r.Context())
@@ -69,28 +101,60 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
-	renderPage(w, indexTmpl, profiles, "Profiles", "Profiles", "Everything bambupm knows about, by canonical name.", "profiles", "")
+	renderPage(w, indexTmpl, profiles, "Profiles", "Bambu Profile Manager", "", "profiles", "")
 }
 
 var profileTmpl = template.Must(template.New("profile").Parse(`
 <p><a href="/" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; All profiles</a></p>
-<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-3">
+
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
   <div class="flex items-center justify-between">
-    <h2 class="text-sm font-medium text-zinc-500">Latest version</h2>
+    <div class="flex items-center gap-3">
+      {{if .Color}}<span class="w-6 h-6 rounded-full border border-zinc-200 shrink-0" style="background:{{.Color}}"></span>{{end}}
+      <h2 class="text-sm font-semibold">{{.Profile.Name}}</h2>
+    </div>
     <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-600">rev {{.Latest.Revision}}</span>
   </div>
-  <p class="text-xs text-zinc-500">semantic hash <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Latest.SemanticHash}}</code></p>
+  {{if .Summary}}
+  <dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+  {{range .Summary}}<div class="flex justify-between border-b border-zinc-50 pb-1"><dt class="text-zinc-500">{{.Label}}</dt><dd class="font-medium">{{.Value}}</dd></div>{{end}}
+  </dl>
+  {{end}}
+  <p class="text-xs text-zinc-400">semantic hash <code class="bg-zinc-100 px-1.5 py-0.5 rounded">{{.Latest.SemanticHash}}</code> &middot; saved {{.Latest.CreatedAt.Format "Jan 2, 2006 15:04"}}</p>
   <details class="text-sm">
-    <summary class="cursor-pointer text-zinc-500 hover:text-zinc-800">Resolved (effective) profile</summary>
-    <pre class="mt-2 bg-zinc-950 text-zinc-200 text-xs p-4 rounded-xl overflow-x-auto">{{.ResolvedJSON}}</pre>
+    <summary class="cursor-pointer text-zinc-500 hover:text-zinc-800">All settings ({{len .AllFields}})</summary>
+    <div class="mt-2 max-h-96 overflow-y-auto rounded-xl border border-zinc-100">
+      <table class="w-full text-xs">
+      {{range .AllFields}}<tr class="border-b border-zinc-50 last:border-0"><td class="px-3 py-1.5 text-zinc-500 whitespace-nowrap align-top">{{.Key}}</td><td class="px-3 py-1.5 font-mono break-all">{{.Value}}</td></tr>{{end}}
+      </table>
+    </div>
   </details>
 </section>
+
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
   <h2 class="text-sm font-medium text-zinc-500 mb-3">All revisions</h2>
-  <ul class="space-y-1.5 text-sm">
-  {{range .All}}<li class="flex items-center justify-between"><span>Revision {{.Revision}}</span><code class="text-xs text-zinc-400">{{.SemanticHash}}</code></li>{{end}}
+  <p class="text-xs text-zinc-400 mb-3">Every publish or import creates a new, immutable revision &mdash; nothing is overwritten.</p>
+  <ul class="space-y-1.5 text-sm mb-4">
+  {{range .All}}<li class="flex items-center justify-between">
+    <span>Revision {{.Revision}} &middot; <span class="text-zinc-400 text-xs">{{.CreatedAt.Format "Jan 2, 2006 15:04"}}</span></span>
+    <code class="text-xs text-zinc-400">{{.SemanticHash}}</code>
+  </li>{{end}}
   </ul>
+  {{if gt (len .All) 1}}
+  <form method="get" action="/profiles/{{.Profile.ID}}/compare" class="flex items-end gap-3 border-t border-zinc-100 pt-4">
+    <label class="block text-xs">
+      <span class="text-zinc-500 block mb-1">Compare revision</span>
+      <select name="a" class="rounded-lg border border-zinc-300 px-2 py-1.5">{{range .All}}<option value="{{.Revision}}">{{.Revision}}</option>{{end}}</select>
+    </label>
+    <label class="block text-xs">
+      <span class="text-zinc-500 block mb-1">with</span>
+      <select name="b" class="rounded-lg border border-zinc-300 px-2 py-1.5">{{range .All}}<option value="{{.Revision}}">{{.Revision}}</option>{{end}}</select>
+    </label>
+    <button type="submit" class="px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 transition">Compare</button>
+  </form>
+  {{end}}
 </section>
+
 <a href="/profiles/{{.Profile.ID}}/deployments" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Deployment history &rarr;</a>
 `))
 
@@ -113,18 +177,111 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
+	var fields map[string]any
+	if err := json.Unmarshal(latest.ResolvedJSON, &fields); err != nil {
+		httpError(w, err)
+		return
+	}
 
 	data := struct {
-		Profile      any
-		Latest       any
-		All          any
-		ResolvedJSON string
-	}{Profile: p, Latest: latest, All: all, ResolvedJSON: string(latest.ResolvedJSON)}
+		Profile   any
+		Latest    any
+		All       any
+		Summary   []summaryField
+		Color     string
+		AllFields []kv
+	}{Profile: p, Latest: latest, All: all, Summary: profileSummary(fields), Color: profileColor(fields), AllFields: sortedFields(fields)}
 	renderPage(w, profileTmpl, data, p.Name, p.Name, "", "profiles", "")
+}
+
+var compareTmpl = template.Must(template.New("compare").Parse(`
+<p><a href="/profiles/{{.ProfileID}}" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; {{.ProfileName}}</a></p>
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <p class="text-sm text-zinc-500">Comparing revision <strong>{{.RevA}}</strong> with <strong>{{.RevB}}</strong>.
+    {{.SameCount}} identical fields hidden.</p>
+  {{if not .Diffs}}
+  <p class="text-sm text-zinc-400">No differences &mdash; these revisions resolve to the same settings.</p>
+  {{else}}
+  <table class="w-full text-xs">
+    <thead><tr class="text-left text-zinc-400 border-b border-zinc-100">
+      <th class="py-2 pr-3 font-medium">Field</th>
+      <th class="py-2 pr-3 font-medium">Rev {{.RevA}}</th>
+      <th class="py-2 font-medium">Rev {{.RevB}}</th>
+    </tr></thead>
+    <tbody>
+    {{range .Diffs}}<tr class="border-b border-zinc-50">
+      <td class="py-2 pr-3 text-zinc-500 whitespace-nowrap align-top">{{.Key}}</td>
+      <td class="py-2 pr-3 font-mono bg-red-50 text-red-700 align-top break-all">{{.A}}</td>
+      <td class="py-2 font-mono bg-emerald-50 text-emerald-700 align-top break-all">{{.B}}</td>
+    </tr>{{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+`))
+
+func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx := r.Context()
+
+	p, err := s.Svc.Repo.Profiles().Get(ctx, id)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	revA, err := strconv.Atoi(r.URL.Query().Get("a"))
+	if err != nil {
+		http.Error(w, "compare: invalid revision a", http.StatusBadRequest)
+		return
+	}
+	revB, err := strconv.Atoi(r.URL.Query().Get("b"))
+	if err != nil {
+		http.Error(w, "compare: invalid revision b", http.StatusBadRequest)
+		return
+	}
+
+	versions, err := s.Svc.Repo.Versions().List(ctx, id)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	var jsonA, jsonB []byte
+	for _, v := range versions {
+		if v.Revision == revA {
+			jsonA = v.ResolvedJSON
+		}
+		if v.Revision == revB {
+			jsonB = v.ResolvedJSON
+		}
+	}
+	if jsonA == nil || jsonB == nil {
+		http.Error(w, "compare: revision not found", http.StatusNotFound)
+		return
+	}
+	var fieldsA, fieldsB map[string]any
+	if err := json.Unmarshal(jsonA, &fieldsA); err != nil {
+		httpError(w, err)
+		return
+	}
+	if err := json.Unmarshal(jsonB, &fieldsB); err != nil {
+		httpError(w, err)
+		return
+	}
+	diffs, sameCount := diffFields(fieldsA, fieldsB)
+
+	data := struct {
+		ProfileID   string
+		ProfileName string
+		RevA, RevB  int
+		Diffs       []fieldDiff
+		SameCount   int
+	}{ProfileID: id, ProfileName: p.Name, RevA: revA, RevB: revB, Diffs: diffs, SameCount: sameCount}
+	renderPage(w, compareTmpl, data, "Compare", "Compare revisions: "+p.Name, "", "profiles", "")
 }
 
 var deploymentsTmpl = template.Must(template.New("deployments").Parse(`
 <p><a href="/profiles/{{.Profile.ID}}" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; {{.Profile.Name}}</a></p>
+<p class="text-sm text-zinc-500">Every attempt to publish this profile into Bambu Studio, in order, with the exact state-machine transitions it went through &mdash; nothing here is claimed without the app actually having checked it.</p>
 {{range .Deployments}}
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
   <div class="flex items-center justify-between mb-3">
@@ -166,6 +323,9 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 
 var importFormTmpl = template.Must(template.New("import").Parse(`
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
+  <p class="text-sm text-zinc-500">A .profilepack is a portable export of one filament profile plus its whole dependency
+    chain (design.md §11) &mdash; it works even if the machine it came from is gone. Importing records it as this
+    profile's next revision; nothing is written to Bambu Studio yet.</p>
 <form method="post" action="/import" enctype="multipart/form-data" class="space-y-4">
   <label class="block">
     <span class="text-xs font-medium text-zinc-500 mb-1 block">.profilepack bundle</span>
