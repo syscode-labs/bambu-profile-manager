@@ -30,7 +30,7 @@ Derived from design.md §20-21 (Agent Workstreams / Execution Order).
 - [ ] Agent H: Ristretto cache, revision-based keys, dependency-aware invalidation, singleflight, WebSocket hub, bounded queues — **deferred until real usage shows a need**, not built up front (decisions.md #7)
 - [x] Agent I (partial): multi-stage Dockerfile (`--platform=$BUILDPLATFORM` + `TARGETOS`/`TARGETARCH`, CGO-free via the pure-Go sqlite driver so amd64/arm64 cross-compile needs no C toolchain), `docker-compose.yml`, `README.md` with run instructions. Built and smoke-tested locally (image builds, container serves the web UI). **Known limitation documented in README**: the Studio-running publish guard (`pgrep`) can't see host processes from inside a container — publish must run natively on the host, not through Docker, until resolved.
 - [x] Agent I: CI workflow — `.github/workflows/ci.yml` (build/vet/test -race, fuzz smoke test, multi-platform Docker build check). Underlying commands verified locally (race-clean test run); the workflow YAML itself validated for syntax.
-- [ ] Agent I (remaining): release artifacts
+- [x] Agent I: release artifacts — `.github/workflows/release.yml`, builds `bambupm` for linux/darwin (amd64+arm64) + windows/amd64 on `v*` tag push, attaches to a GitHub Release. All 5 target combinations cross-compiled successfully in a local dry run (CGO-free, pure-Go sqlite driver).
 - Exit gate: `docker compose up` runs a working local instance — proven (`docker build` + container smoke test passed); against a bind-mounted Bambu directory specifically is deferred until rebind/publish are exposed as CLI commands (see "Known limitations" in README)
 
 ## Deferred (post-v1)
