@@ -1,0 +1,10 @@
+{
+    "type": "process",
+    "name": "fdm_process_single_0.20",
+    "inherits": "fdm_process_single_common",
+    "from": "system",
+    "instantiation": "false",
+    "outer_wall_speed": [
+        "200"
+    ]
+}

@@ -246,19 +246,42 @@ func (s *Server) compareOptions(ctx context.Context) ([]compareOption, error) {
 		}
 	}
 
-	if s.UserDir != "" {
-		set, err := resolver.LoadDirs(append([]string{s.UserDir}, s.SystemDirs...))
+	liveOpts, err := liveCompareOptions(s.UserDir, s.SystemDirs, "live:", "(live)")
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, liveOpts...)
+
+	if s.ProcessSvc != nil {
+		processOpts, err := liveCompareOptions(s.ProcessUserDir, s.ProcessSystemDirs, "liveprocess:", "(live, process)")
 		if err != nil {
 			return nil, err
 		}
-		names := make([]string, 0, len(set))
-		for name := range set {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			opts = append(opts, compareOption{Value: "live:" + name, Label: name + " (live)"})
-		}
+		opts = append(opts, processOpts...)
+	}
+	return opts, nil
+}
+
+// liveCompareOptions lists every profile found live under userDir/systemDirs
+// as a compareOption, prefixed and labeled distinctly per caller — used for
+// both filament ("live:") and process ("liveprocess:") so the two can never
+// collide even if a name happened to match across the two catalogs.
+func liveCompareOptions(userDir string, systemDirs []string, prefix, labelSuffix string) ([]compareOption, error) {
+	if userDir == "" {
+		return nil, nil
+	}
+	set, err := resolver.LoadDirs(append([]string{userDir}, systemDirs...))
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	opts := make([]compareOption, 0, len(names))
+	for _, name := range names {
+		opts = append(opts, compareOption{Value: prefix + name, Label: name + " " + labelSuffix})
 	}
 	return opts, nil
 }
@@ -349,6 +372,15 @@ func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
 	var selected []comparedItem
 	var fieldsList []map[string]any
 	for _, it := range itemKeys {
+		if name, ok := strings.CutPrefix(it, "liveprocess:"); ok {
+			fields, err := resolveFieldsFrom(s.ProcessUserDir, s.ProcessSystemDirs, name)
+			if err != nil {
+				continue
+			}
+			selected = append(selected, comparedItem{ProfileName: name + " (process)", IsLive: true})
+			fieldsList = append(fieldsList, fields)
+			continue
+		}
 		if name, ok := strings.CutPrefix(it, "live:"); ok {
 			fields, err := s.resolveLiveFields(name)
 			if err != nil {

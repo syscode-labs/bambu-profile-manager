@@ -1,0 +1,9 @@
+{
+    "type": "process",
+    "name": "Syscode - 0.20mm Standard @BBL X1C",
+    "inherits": "0.20mm Standard @BBL X1C",
+    "from": "User",
+    "print_settings_id": "Syscode - 0.20mm Standard @BBL X1C",
+    "wall_loops": "4",
+    "sparse_infill_density": "25%"
+}

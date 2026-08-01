@@ -70,6 +70,50 @@ type Server struct {
 	// nothing here is ever staged/published (bambupm manages filament
 	// profiles, not printer profiles — design.md §3).
 	MachineDirs []string
+
+	// ProcessSvc/ProcessUserDir/ProcessSystemDirs mirror Svc/UserDir/
+	// SystemDirs but for process (print) profiles — a separate directory
+	// tree (process/, not filament/) with its own Service/Repo/db so
+	// process and filament deployments never share IDs. Nil ProcessSvc
+	// means --process-user-dir wasn't set; the process copy routes 404.
+	//
+	// Process profiles don't get one system leaf per exact printer model
+	// the way filament does — Bambu shares one leaf across a printer
+	// family via an explicit compatible_printers field instead (confirmed:
+	// there is no "@BBL P1S" process profile anywhere in the real system
+	// catalog; P1S reuses X1C's). So matching a target-printer candidate
+	// for process profiles uses rebind.FindCandidateParentsByCompatiblePrinters
+	// against the resolved compatible_printers field, not filament's
+	// printer-token-in-the-name regex — see profileKind.MatchByCompatiblePrinters.
+	ProcessSvc        *service.Service
+	ProcessUserDir    string
+	ProcessSystemDirs []string
+}
+
+// profileKind bundles what the copy/publish/check flow needs for one
+// profile type (filament or process) so the same handler logic serves both
+// without duplicating it — see Server.filamentKind/processKind.
+type profileKind struct {
+	Key                       string // "filament" | "process" — used in URLs
+	Label                     string // for prose: "filament", "process (print)"
+	Svc                       *service.Service
+	UserDir                   string
+	SystemDirs                []string
+	MatchByCompatiblePrinters bool
+}
+
+func (s *Server) filamentKind() profileKind {
+	return profileKind{Key: "filament", Label: "filament", Svc: s.Svc, UserDir: s.UserDir, SystemDirs: s.SystemDirs}
+}
+
+func (s *Server) processKind() (profileKind, bool) {
+	if s.ProcessSvc == nil {
+		return profileKind{}, false
+	}
+	return profileKind{
+		Key: "process", Label: "process (print)", Svc: s.ProcessSvc,
+		UserDir: s.ProcessUserDir, SystemDirs: s.ProcessSystemDirs, MatchByCompatiblePrinters: true,
+	}, true
 }
 
 func (s *Server) Routes() http.Handler {
@@ -87,6 +131,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /copy/publish", s.handleCopyPublish)
 	mux.HandleFunc("GET /deployments/{id}", s.handleDeploymentDetail)
 	mux.HandleFunc("POST /deployments/{id}/check", s.handleCheckRecognition)
+	mux.HandleFunc("GET /copy/process", s.handleCopyFormProcess)
+	mux.HandleFunc("POST /copy/process/preview", s.handleCopyPreviewProcess)
+	mux.HandleFunc("POST /copy/process/publish", s.handleCopyPublishProcess)
+	mux.HandleFunc("GET /deployments/process/{id}", s.handleDeploymentDetailProcess)
+	mux.HandleFunc("POST /deployments/process/{id}/check", s.handleCheckRecognitionProcess)
 	mux.HandleFunc("GET /backups", s.handleBackupsList)
 	mux.HandleFunc("POST /backups/{name}/restore", s.handleBackupRestore)
 	return mux
@@ -231,7 +280,14 @@ var liveProfileTmpl = template.Must(template.New("liveProfile").Parse(`
 // name's full effective (flattened) fields — shared by the live-profile
 // page and the copy form's hover preview, so both read the same real data.
 func (s *Server) resolveLiveFields(name string) (map[string]any, error) {
-	set, err := resolver.LoadDirs(append([]string{s.UserDir}, s.SystemDirs...))
+	return resolveFieldsFrom(s.UserDir, s.SystemDirs, name)
+}
+
+// resolveFieldsFrom is resolveLiveFields generalized over which directories
+// to scan, so the same lookup serves process profiles too (ProcessUserDir/
+// ProcessSystemDirs) — see handleProfilePreviewFragment's ?kind= handling.
+func resolveFieldsFrom(userDir string, systemDirs []string, name string) (map[string]any, error) {
+	set, err := resolver.LoadDirs(append([]string{userDir}, systemDirs...))
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +349,17 @@ func (s *Server) handleProfilePreviewFragment(w http.ResponseWriter, r *http.Req
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	fields, err := s.resolveLiveFields(name)
+	var fields map[string]any
+	var err error
+	if r.URL.Query().Get("kind") == "process" {
+		if s.ProcessSvc == nil {
+			http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+			return
+		}
+		fields, err = resolveFieldsFrom(s.ProcessUserDir, s.ProcessSystemDirs, name)
+	} else {
+		fields, err = s.resolveLiveFields(name)
+	}
 	if errors.Is(err, storage.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return

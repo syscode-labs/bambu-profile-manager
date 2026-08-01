@@ -74,12 +74,17 @@ Usage:
 
   bambupm serve --db <path> --addr :8080 [--user-dir <dir>] [--system-dir <dir> [...]]
                 [--machine-dir <dir> [...]] [--backups-dir <dir>]
+                [--process-user-dir <dir>] [--process-system-dir <dir> [...]]
       Start the local web UI. List/detail/import always work. Pass
       --user-dir (and --system-dir for target-parent matching) to also
       enable Copy-to-another-printer and Backups. --machine-dir (your
       real printer profile directories, both user and system) populates
       the "target printer" dropdown with your actual printers instead
-      of guessed tokens.
+      of guessed tokens. --process-user-dir/--process-system-dir (your
+      process/print profile directories, e.g. .../user/<id>/process and
+      .../system/BBL/process) enable copying process profiles the same
+      way, at /copy/process — kept in a separate db from filament
+      deployments, derived automatically next to --db.
 
   bambupm publish --db <path> --user-dir <dir> --system-dir <dir> [...]
                   --name "<profile name>" --target <candidate> [...]
@@ -179,6 +184,8 @@ func cmdServe(args []string) {
 	if backupsDir == "" {
 		backupsDir = defaultBackupsDir(dbPath)
 	}
+	processUserDir := flagValue(args, "--process-user-dir")
+	processSystemDirs := flagValues(args, "--process-system-dir")
 
 	repo, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -195,10 +202,37 @@ func cmdServe(args []string) {
 	}
 	srv := &webui.Server{Svc: svc, UserDir: userDir, SystemDirs: systemDirs, MachineDirs: machineDirs}
 
+	// Process (print) profiles get their own db/Repo (see webui.Server's
+	// doc comment on ProcessSvc) so process and filament deployment IDs
+	// never collide — everything else about the flow (rebind, backup,
+	// reconcile state machine, poller) is reused as-is.
+	if processUserDir != "" {
+		processDBPath := defaultProcessDBPath(dbPath)
+		processRepo, err := sqlite.Open(processDBPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "serve: process db:", err)
+			os.Exit(1)
+		}
+		defer processRepo.Close()
+		srv.ProcessSvc = &service.Service{
+			Repo:       processRepo,
+			Adapter:    &bambuadapter.LocalAdapter{Dir: processUserDir},
+			Detector:   reconcile.RewriteDetector{},
+			NewID:      newUUID,
+			BackupsDir: defaultBackupsDir(processDBPath),
+		}
+		srv.ProcessUserDir = processUserDir
+		srv.ProcessSystemDirs = processSystemDirs
+	}
+
 	fmt.Fprintf(os.Stderr, "bambupm web UI listening on %s (db: %s)\n", addr, dbPath)
 	if userDir == "" {
 		fmt.Fprintln(os.Stderr, "note: --user-dir not set — list/detail/import work, but Copy/Backups pages need it")
-	} else {
+	}
+	if processUserDir == "" {
+		fmt.Fprintln(os.Stderr, "note: --process-user-dir not set — process (print) profile copy is disabled")
+	}
+	if userDir != "" || processUserDir != "" {
 		go srv.PollRecognition(context.Background(), 5*time.Second)
 	}
 	if err := http.ListenAndServe(addr, srv.Routes()); err != nil {

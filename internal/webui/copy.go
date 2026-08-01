@@ -47,8 +47,12 @@ func shortPrinterToken(printerModel, nozzleDiameter string) string {
 // printerOption is one selectable entry in the "target printer" dropdown:
 // Name is the real machine profile's own name (what the user actually
 // called their printer, e.g. "Bambu Lab X1 Carbon 0.4 nozzle - Obsidian
-// HF"), Token is the short code passed to rebind.FindCandidateParents.
-type printerOption struct{ Name, Token string }
+// HF"), Token is the short code passed to rebind.FindCandidateParents for
+// filament profiles, Canonical is the exact "<printer_model> <nozzle>
+// nozzle" string Bambu's own compatible_printers field uses — needed for
+// process profiles, which are matched by that field, not by name (see
+// profileKind.MatchByCompatiblePrinters).
+type printerOption struct{ Name, Token, Canonical string }
 
 // discoverRealPrinters lists selectable printer options limited to MODELS
 // the user actually owns — machineSet must include the full user+system
@@ -96,7 +100,10 @@ func discoverRealPrinters(machineSet resolver.Set) []printerOption {
 		if arr, ok := effective.Fields["nozzle_diameter"].([]any); ok && len(arr) > 0 {
 			nozzle = fmt.Sprint(arr[0])
 		}
-		out = append(out, printerOption{Name: name, Token: shortPrinterToken(model, nozzle)})
+		out = append(out, printerOption{
+			Name: name, Token: shortPrinterToken(model, nozzle),
+			Canonical: strings.TrimSpace(model + " " + nozzle + " nozzle"),
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -106,12 +113,14 @@ func discoverRealPrinters(machineSet resolver.Set) []printerOption {
 // now (the same best-effort pgrep check bambuadapter.Publish enforces) and
 // returns a callout banner if so, or if the check itself failed (decisions
 // #4: an unknown result must not be silently treated as "not running").
-// Empty when Studio is confirmed closed.
-func (s *Server) studioWarning() template.HTML {
-	if s.Svc == nil || s.Svc.Adapter == nil {
+// Empty when Studio is confirmed closed. svc is explicit (not always s.Svc)
+// since the process copy flow checks its own Adapter/Service, not
+// filament's.
+func studioWarning(svc *service.Service) template.HTML {
+	if svc == nil || svc.Adapter == nil {
 		return ""
 	}
-	checker := s.Svc.Adapter.IsStudioRunning
+	checker := svc.Adapter.IsStudioRunning
 	if checker == nil {
 		checker = bambuadapter.PgrepStudioRunning
 	}
@@ -130,17 +139,29 @@ func (s *Server) studioWarning() template.HTML {
 }
 
 var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
+<div class="inline-flex rounded-full bg-zinc-100 p-1 text-sm font-medium">
+  <a href="/copy" class="px-4 py-1.5 rounded-full transition {{if eq .Kind "filament"}}bg-zinc-900 text-white shadow-sm{{else}}text-zinc-500 hover:text-zinc-800{{end}}">Filament</a>
+  <a href="/copy/process" class="px-4 py-1.5 rounded-full transition {{if eq .Kind "process"}}bg-zinc-900 text-white shadow-sm{{else}}text-zinc-500 hover:text-zinc-800{{end}}">Process (print)</a>
+</div>
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
   <div class="flex items-center gap-2 text-sm font-medium text-zinc-500">
     <span class="w-5 h-5 rounded-full bg-zinc-900 text-white text-xs flex items-center justify-center shrink-0">1</span>
     Choose a profile and target printer
   </div>
+  {{if eq .Kind "filament"}}
   <p class="text-xs text-zinc-500 -mt-2">
     Pick a filament you already have, and the printer you want it usable under. bambupm looks for a parent profile
     that matches both the same material (ABS, PLA, ...) and your target printer &mdash; the same lookup Bambu Studio
     itself would need, done for you. Your settings (color, vendor, temps) carry over either way.
   </p>
-<form method="post" action="/copy/preview" class="space-y-4">
+  {{else}}
+  <p class="text-xs text-zinc-500 -mt-2">
+    Pick a process (print) profile you already have, and the printer you want it usable under. Process profiles work
+    differently from filament: Bambu often already lists your target printer as compatible on the profile you have
+    (many printers share tuning) &mdash; bambupm checks that first and tells you if there's nothing to copy at all.
+  </p>
+  {{end}}
+<form method="post" action="{{if eq .Kind "process"}}/copy/process/preview{{else}}/copy/preview{{end}}" class="space-y-4">
   <div class="grid grid-cols-2 gap-4">
     <label class="block">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">Profile</span>
@@ -148,7 +169,7 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
         <div id="filament-preview-wrap" class="relative shrink-0">
           <button type="button" id="filament-preview-btn"
             class="w-8 h-8 rounded-lg border border-zinc-300 text-zinc-400 hover:text-zinc-700 hover:border-zinc-400 text-xs flex items-center justify-center"
-            aria-label="Preview filament properties">&#9432;</button>
+            aria-label="Preview profile properties">&#9432;</button>
           <div id="filament-preview-popup" class="hidden absolute left-0 top-8 pt-2 z-20 w-96 max-h-[32rem] overflow-y-auto bg-white border border-zinc-200 rounded-xl shadow-lg p-4 text-xs"></div>
         </div>
         <select id="copy-profile-select" name="name" required class="flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
@@ -159,7 +180,7 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
     <label class="block">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">Target printer</span>
       <select name="printer_token" required class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
-      {{range .Printers}}<option value="{{.Token}}">{{.Name}}</option>{{end}}
+      {{range .Printers}}<option value="{{.Token}}|{{.Canonical}}">{{.Name}}</option>{{end}}
       </select>
       <span class="text-xs text-zinc-400 mt-1 block">Your actual printer profiles, resolved to their real model/nozzle.</span>
     </label>
@@ -174,6 +195,7 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
   var btn = document.getElementById('filament-preview-btn');
   var popup = document.getElementById('filament-preview-popup');
   if (!select || !wrap || !btn || !popup) return;
+  var previewKind = {{if eq .Kind "process"}}'&kind=process'{{else}}''{{end}};
   var cache = {};
   var hideTimer = null;
   function load(name) {
@@ -182,7 +204,7 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
       return;
     }
     popup.innerHTML = '<p class="text-zinc-400">Loading…</p>';
-    fetch('/api/profile-preview?name=' + encodeURIComponent(name))
+    fetch('/api/profile-preview?name=' + encodeURIComponent(name) + previewKind)
       .then(function(r) { return r.ok ? r.text() : Promise.reject(r.status); })
       .then(function(html) { cache[name] = html; popup.innerHTML = html; })
       .catch(function() { popup.innerHTML = '<p class="text-red-500">Could not load preview.</p>'; });
@@ -205,7 +227,20 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
 `))
 
 func (s *Server) handleCopyForm(w http.ResponseWriter, r *http.Request) {
-	set, err := resolver.LoadDirs([]string{s.UserDir})
+	s.renderCopyForm(w, r, s.filamentKind())
+}
+
+func (s *Server) handleCopyFormProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderCopyForm(w, r, kind)
+}
+
+func (s *Server) renderCopyForm(w http.ResponseWriter, r *http.Request, kind profileKind) {
+	set, err := resolver.LoadDirs([]string{kind.UserDir})
 	if err != nil {
 		httpError(w, err)
 		return
@@ -224,17 +259,31 @@ func (s *Server) handleCopyForm(w http.ResponseWriter, r *http.Request) {
 	printers := discoverRealPrinters(machineSet)
 
 	data := struct {
+		Kind     string
 		Names    []string
 		Printers []printerOption
-	}{Names: names, Printers: printers}
-	renderPage(w, copyFormTmpl, data, "Copy", "Copy a filament profile to another printer", "Rebind without touching dependency chains yourself.", "copy", s.studioWarning())
+	}{Kind: kind.Key, Names: names, Printers: printers}
+	title := "Copy a filament profile to another printer"
+	if kind.Key == "process" {
+		title = "Copy a process (print) profile to another printer"
+	}
+	renderPage(w, copyFormTmpl, data, "Copy", title, "Rebind without touching dependency chains yourself.", "copy", studioWarning(kind.Svc))
 }
 
 var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
-<p><a href="/copy" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; Start over</a></p>
-{{if not .Candidates}}
+{{$startOverHref := "/copy"}}{{if eq .Kind "process"}}{{$startOverHref = "/copy/process"}}{{end}}
+{{$publishAction := "/copy/publish"}}{{if eq .Kind "process"}}{{$publishAction = "/copy/process/publish"}}{{end}}
+<p><a href="{{$startOverHref}}" class="text-sm text-zinc-500 hover:text-zinc-800">&larr; Start over</a></p>
+{{if .AlreadyCompatible}}
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
-  <p class="text-sm text-zinc-500">No matching parent found under "{{.PrinterToken}}" for this profile's material. Nothing safe to auto-map.</p>
+  <div class="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
+    <svg class="w-5 h-5 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+    <p class="text-sm text-emerald-900">Nothing to copy &mdash; "{{.Name}}" already lists "{{.PrinterToken}}" as a compatible printer. Select it directly in Bambu Studio when that printer is active.</p>
+  </div>
+</section>
+{{else if not .Candidates}}
+<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
+  <p class="text-sm text-zinc-500">No matching parent found under "{{.PrinterToken}}" for this profile's family. Nothing safe to auto-map.</p>
 </section>
 {{else if gt (len .Candidates) 1}}
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
@@ -242,10 +291,10 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
     <span class="w-5 h-5 rounded-full bg-zinc-900 text-white text-xs flex items-center justify-center shrink-0">2</span>
     Pick a parent
   </div>
-  <p class="text-sm text-zinc-500">In Bambu Studio, every filament profile inherits its settings from a base "parent" profile &mdash; that's how "@P1S" or "@X1C" variants share most of their settings. {{len .Candidates}} base profiles match both this filament's material and "{{.PrinterToken}}", so this tool won't guess which one your copy should inherit from. Add more of the printer name (e.g. the nozzle size) on the previous step to narrow it to one, or just pick the correct base profile below.</p>
+  <p class="text-sm text-zinc-500">In Bambu Studio, every profile inherits its settings from a base "parent" profile &mdash; that's how "@P1S" or "@X1C" variants share most of their settings. {{len .Candidates}} base profiles match both this profile's family and "{{.PrinterToken}}", so this tool won't guess which one your copy should inherit from. Add more of the printer name (e.g. the nozzle size) on the previous step to narrow it to one, or just pick the correct base profile below.</p>
   {{$name := .Name}}{{$token := .PrinterToken}}
   {{range .Candidates}}
-  <form method="post" action="/copy/publish" class="border border-zinc-200 rounded-xl p-4 space-y-3">
+  <form method="post" action="{{$publishAction}}" class="border border-zinc-200 rounded-xl p-4 space-y-3">
     <input type="hidden" name="name" value="{{$name}}">
     <input type="hidden" name="parent" value="{{.}}">
     <p class="text-sm font-medium">{{.}}</p>
@@ -274,7 +323,7 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
     </div>
     <span class="text-xs font-medium px-2 py-1 rounded-full bg-emerald-600 text-white">auto-matched</span>
   </div>
-  <form method="post" action="/copy/publish" class="space-y-4">
+  <form method="post" action="{{$publishAction}}" class="space-y-4">
     <input type="hidden" name="name" value="{{.Name}}">
     <input type="hidden" name="parent" value="{{index .Candidates 0}}">
     <label class="block">
@@ -289,18 +338,45 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
 `))
 
 func (s *Server) handleCopyPreview(w http.ResponseWriter, r *http.Request) {
+	s.renderCopyPreview(w, r, s.filamentKind())
+}
+
+func (s *Server) handleCopyPreviewProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderCopyPreview(w, r, kind)
+}
+
+// splitPrinterTarget separates the copy form's composite select value
+// ("<short token>|<canonical compatible_printers string>") back into its
+// two halves. A value with no "|" (e.g. a test or script posting a bare
+// token directly) falls back to using it for both, so filament's existing
+// plain-token behavior is unaffected.
+func splitPrinterTarget(raw string) (token, canonical string) {
+	token, canonical, ok := strings.Cut(raw, "|")
+	if !ok {
+		return raw, raw
+	}
+	return token, canonical
+}
+
+func (s *Server) renderCopyPreview(w http.ResponseWriter, r *http.Request, kind profileKind) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "copy: parse form: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	name := r.FormValue("name")
-	printerToken := r.FormValue("printer_token")
-	if name == "" || printerToken == "" {
+	raw := r.FormValue("printer_token")
+	if name == "" || raw == "" {
 		http.Error(w, "copy: name and printer_token are required", http.StatusBadRequest)
 		return
 	}
+	token, canonical := splitPrinterTarget(raw)
 
-	set, err := resolver.LoadDirs(append([]string{s.UserDir}, s.SystemDirs...))
+	set, err := resolver.LoadDirs(append([]string{kind.UserDir}, kind.SystemDirs...))
 	if err != nil {
 		httpError(w, err)
 		return
@@ -310,18 +386,38 @@ func (s *Server) handleCopyPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("copy: %q not found", name), http.StatusNotFound)
 		return
 	}
-	candidates, err := rebind.FindCandidateParents(set, set, leaf, printerToken)
-	if err != nil {
-		httpError(w, err)
-		return
+
+	var alreadyCompatible bool
+	var candidates []string
+	if kind.MatchByCompatiblePrinters {
+		alreadyCompatible, err = rebind.IsAlreadyCompatible(set, leaf, canonical)
+		if err != nil {
+			httpError(w, err)
+			return
+		}
+		if !alreadyCompatible {
+			candidates, err = rebind.FindCandidateParentsByCompatiblePrinters(set, set, leaf, canonical)
+			if err != nil {
+				httpError(w, err)
+				return
+			}
+		}
+	} else {
+		candidates, err = rebind.FindCandidateParents(set, set, leaf, token)
+		if err != nil {
+			httpError(w, err)
+			return
+		}
 	}
 
 	data := struct {
-		Name         string
-		PrinterToken string
-		Candidates   []string
-	}{Name: name, PrinterToken: printerToken, Candidates: candidates}
-	renderPage(w, copyPreviewTmpl, data, "Copy preview", "Copy preview: "+name, "&rarr; "+printerToken, "copy", s.studioWarning())
+		Kind              string
+		Name              string
+		PrinterToken      string
+		AlreadyCompatible bool
+		Candidates        []string
+	}{Kind: kind.Key, Name: name, PrinterToken: token, AlreadyCompatible: alreadyCompatible, Candidates: candidates}
+	renderPage(w, copyPreviewTmpl, data, "Copy preview", "Copy preview: "+name, "&rarr; "+token, "copy", studioWarning(kind.Svc))
 }
 
 var copyResultTmpl = template.Must(template.New("copyResult").Funcs(statusFuncs).Parse(`
@@ -338,7 +434,7 @@ var copyResultTmpl = template.Must(template.New("copyResult").Funcs(statusFuncs)
     {{if .Reason}}<p class="text-xs text-zinc-400">{{.Reason}}</p>{{end}}
   </li>{{end}}
   </ol>
-  <a href="/deployments/{{.Deployment.ID}}" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Deployment detail &rarr;</a>
+  <a href="{{if eq .Kind "process"}}/deployments/process/{{.Deployment.ID}}{{else}}/deployments/{{.Deployment.ID}}{{end}}" class="inline-block text-sm font-medium text-emerald-600 hover:text-emerald-700">Deployment detail &rarr;</a>
 </section>
 `))
 
@@ -353,6 +449,19 @@ var studioBlockedTmpl = template.Must(template.New("studioBlocked").Parse(`
 `))
 
 func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
+	s.renderCopyPublish(w, r, s.filamentKind())
+}
+
+func (s *Server) handleCopyPublishProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderCopyPublish(w, r, kind)
+}
+
+func (s *Server) renderCopyPublish(w http.ResponseWriter, r *http.Request, kind profileKind) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "copy: parse form: "+err.Error(), http.StatusBadRequest)
 		return
@@ -365,7 +474,7 @@ func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	set, err := resolver.LoadDirs(append([]string{s.UserDir}, s.SystemDirs...))
+	set, err := resolver.LoadDirs(append([]string{kind.UserDir}, kind.SystemDirs...))
 	if err != nil {
 		httpError(w, err)
 		return
@@ -377,16 +486,16 @@ func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	profile, err := s.Svc.Repo.Profiles().GetByName(ctx, name)
+	profile, err := kind.Svc.Repo.Profiles().GetByName(ctx, name)
 	if errors.Is(err, storage.ErrNotFound) {
-		profile, err = s.Svc.Repo.Profiles().Create(ctx, name)
+		profile, err = kind.Svc.Repo.Profiles().Create(ctx, name)
 	}
 	if err != nil {
 		httpError(w, err)
 		return
 	}
 
-	result, err := s.Svc.RebindAndPublish(ctx, set, set, leaf, []string{parent}, profile.ID, confirmName,
+	result, err := kind.Svc.RebindAndPublish(ctx, set, set, leaf, []string{parent}, profile.ID, confirmName,
 		reconcile.InfoFields{}, reconcile.InfoFields{})
 	if errors.Is(err, bambuadapter.ErrStudioRunning) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
@@ -408,11 +517,12 @@ func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := struct {
+		Kind       string
 		Deployment any
 		Parent     string
 		Name       string
 		Snapshot   string
-	}{Deployment: result.Deployment, Parent: parent, Name: confirmName, Snapshot: result.Snapshot}
+	}{Kind: kind.Key, Deployment: result.Deployment, Parent: parent, Name: confirmName, Snapshot: result.Snapshot}
 	renderPage(w, copyResultTmpl, data, "Copy result", "Copy result", "", "copy", "")
 }
 
@@ -450,8 +560,21 @@ var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Funcs(
 `))
 
 func (s *Server) handleDeploymentDetail(w http.ResponseWriter, r *http.Request) {
+	s.renderDeploymentDetail(w, r, s.filamentKind())
+}
+
+func (s *Server) handleDeploymentDetailProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderDeploymentDetail(w, r, kind)
+}
+
+func (s *Server) renderDeploymentDetail(w http.ResponseWriter, r *http.Request, kind profileKind) {
 	id := r.PathValue("id")
-	dep, err := s.Svc.Repo.Deployments().Get(r.Context(), id)
+	dep, err := kind.Svc.Repo.Deployments().Get(r.Context(), id)
 	if err != nil {
 		httpError(w, err)
 		return
@@ -465,12 +588,12 @@ func (s *Server) handleDeploymentDetail(w http.ResponseWriter, r *http.Request) 
 // Studio has picked it up since. Shared by the manual HTTP endpoint (kept
 // for tests/scripting) and the background poller — both need the identical
 // lookup, only the caller differs.
-func (s *Server) recheckDeployment(ctx context.Context, id string) error {
-	dep, err := s.Svc.Repo.Deployments().Get(ctx, id)
+func recheckDeployment(ctx context.Context, kind profileKind, id string) error {
+	dep, err := kind.Svc.Repo.Deployments().Get(ctx, id)
 	if err != nil {
 		return err
 	}
-	versions, err := s.Svc.Repo.Versions().List(ctx, dep.ProfileID)
+	versions, err := kind.Svc.Repo.Versions().List(ctx, dep.ProfileID)
 	if err != nil {
 		return err
 	}
@@ -488,8 +611,8 @@ func (s *Server) recheckDeployment(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	publishedPath := filepath.Join(s.UserDir, targetProfile.Name+".json")
-	infoPath := filepath.Join(s.UserDir, targetProfile.Name+".info")
+	publishedPath := filepath.Join(kind.UserDir, targetProfile.Name+".json")
+	infoPath := filepath.Join(kind.UserDir, targetProfile.Name+".info")
 
 	afterInfo := reconcile.InfoFields{}
 	if b, err := os.ReadFile(infoPath); err == nil {
@@ -498,13 +621,26 @@ func (s *Server) recheckDeployment(ctx context.Context, id string) error {
 		return err
 	}
 
-	_, err = s.Svc.CheckRecognition(ctx, id, targetProfile, publishedPath, reconcile.InfoFields{}, afterInfo)
+	_, err = kind.Svc.CheckRecognition(ctx, id, targetProfile, publishedPath, reconcile.InfoFields{}, afterInfo)
 	return err
 }
 
 func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) {
+	s.renderCheckRecognition(w, r, s.filamentKind(), "/deployments/")
+}
+
+func (s *Server) handleCheckRecognitionProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderCheckRecognition(w, r, kind, "/deployments/process/")
+}
+
+func (s *Server) renderCheckRecognition(w http.ResponseWriter, r *http.Request, kind profileKind, redirectPrefix string) {
 	id := r.PathValue("id")
-	if err := s.recheckDeployment(r.Context(), id); err != nil {
+	if err := recheckDeployment(r.Context(), kind, id); err != nil {
 		// Still redirect rather than 500: the deployment was saved with
 		// whatever state it reached, and that's visible in its history
 		// (e.g. SEMANTIC_MISMATCH is a real, informative outcome, not a
@@ -512,42 +648,51 @@ func (s *Server) handleCheckRecognition(w http.ResponseWriter, r *http.Request) 
 		// isn't completely invisible.
 		fmt.Fprintf(os.Stderr, "check-recognition %s: %v\n", id, err)
 	}
-	http.Redirect(w, r, "/deployments/"+id, http.StatusSeeOther)
+	http.Redirect(w, r, redirectPrefix+id, http.StatusSeeOther)
 }
 
-// pollOnce scans every deployment sitting at INSTALLED_LOCALLY and rechecks
-// it once. Called on a timer by PollRecognition; split out so tests can
-// drive a single pass deterministically instead of racing a real ticker.
-func (s *Server) pollOnce(ctx context.Context) {
-	profiles, err := s.Svc.Repo.Profiles().List(ctx)
+// pollOnceForKind scans every deployment in kind's Repo sitting at
+// INSTALLED_LOCALLY and rechecks it once. Called for each configured kind on
+// a timer by PollRecognition; split out so tests can drive a single pass
+// deterministically instead of racing a real ticker.
+func pollOnceForKind(ctx context.Context, kind profileKind) {
+	profiles, err := kind.Svc.Repo.Profiles().List(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "recognition poll: list profiles: %v\n", err)
+		fmt.Fprintf(os.Stderr, "recognition poll (%s): list profiles: %v\n", kind.Key, err)
 		return
 	}
 	for _, p := range profiles {
-		deps, err := s.Svc.Repo.Deployments().ListByProfile(ctx, p.ID)
+		deps, err := kind.Svc.Repo.Deployments().ListByProfile(ctx, p.ID)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "recognition poll: list deployments for %s: %v\n", p.ID, err)
+			fmt.Fprintf(os.Stderr, "recognition poll (%s): list deployments for %s: %v\n", kind.Key, p.ID, err)
 			continue
 		}
 		for _, dep := range deps {
 			if dep.State != reconcile.StateInstalledLocally {
 				continue
 			}
-			if err := s.recheckDeployment(ctx, dep.ID); err != nil {
-				fmt.Fprintf(os.Stderr, "recognition poll: deployment %s: %v\n", dep.ID, err)
+			if err := recheckDeployment(ctx, kind, dep.ID); err != nil {
+				fmt.Fprintf(os.Stderr, "recognition poll (%s): deployment %s: %v\n", kind.Key, dep.ID, err)
 			}
 		}
 	}
 }
 
-// PollRecognition runs pollOnce on a fixed interval until ctx is canceled.
-// Bambu Studio only updates a profile's local tracking metadata when the
-// user Saves it in Studio's own UI (confirmed empirically — reopening,
-// selecting, or slicing the profile alone do not); bambupm cannot trigger or
-// detect that moment except by re-reading the file afterwards, so this is
-// the closest thing to "automatic" available: the user still Saves once in
-// Studio, but no longer has to come back and click a button to notice it.
+func (s *Server) pollOnce(ctx context.Context) {
+	pollOnceForKind(ctx, s.filamentKind())
+	if kind, ok := s.processKind(); ok {
+		pollOnceForKind(ctx, kind)
+	}
+}
+
+// PollRecognition runs pollOnce (both filament and, if configured, process
+// deployments) on a fixed interval until ctx is canceled. Bambu Studio only
+// updates a profile's local tracking metadata when the user Saves it in
+// Studio's own UI (confirmed empirically — reopening, selecting, or slicing
+// the profile alone do not); bambupm cannot trigger or detect that moment
+// except by re-reading the file afterwards, so this is the closest thing to
+// "automatic" available: the user still Saves once in Studio, but no longer
+// has to come back and click a button to notice it.
 func (s *Server) PollRecognition(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -586,7 +731,7 @@ func (s *Server) handleBackupsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := struct{ List any }{List: list}
-	renderPage(w, backupsTmpl, data, "Backups", "Backups", "Point-in-time snapshots taken automatically before every publish.", "backups", s.studioWarning())
+	renderPage(w, backupsTmpl, data, "Backups", "Backups", "Point-in-time snapshots taken automatically before every publish.", "backups", studioWarning(s.Svc))
 }
 
 func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {

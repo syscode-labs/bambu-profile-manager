@@ -1,0 +1,8 @@
+{
+    "type": "process",
+    "name": "fdm_process_single_common",
+    "inherits": "fdm_process_common",
+    "from": "system",
+    "instantiation": "false",
+    "top_shell_layers": "4"
+}

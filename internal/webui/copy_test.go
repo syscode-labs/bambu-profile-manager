@@ -60,6 +60,57 @@ func flattenFixturesInto(t *testing.T, dest string) {
 	}
 }
 
+// flattenProcessFixturesInto copies the process (print) fixture set into one
+// flat directory the same way flattenFixturesInto does for filament — a
+// deliberately different family shape (see testdata/fixtures/x1c-to-p1s/process):
+// no per-exact-printer system leaf, printers share one leaf via
+// compatible_printers instead.
+func flattenProcessFixturesInto(t *testing.T, dest string) {
+	t.Helper()
+	dir := filepath.Join("..", "..", "testdata", "fixtures", "x1c-to-p1s", "process")
+	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		t.Fatalf("glob %s: %v", dir, err)
+	}
+	for _, m := range matches {
+		b, err := os.ReadFile(m)
+		if err != nil {
+			t.Fatalf("read %s: %v", m, err)
+		}
+		if err := os.WriteFile(filepath.Join(dest, filepath.Base(m)), b, 0o644); err != nil {
+			t.Fatalf("write %s: %v", filepath.Base(m), err)
+		}
+	}
+}
+
+// newTestServerWithProcessDir builds on newTestServerWithLiveDir, adding a
+// second, wholly separate Service/Repo/db for process (print) profiles —
+// mirrors cmdServe's production wiring (webui.Server's doc comment on
+// ProcessSvc: process and filament deployments must never share IDs).
+func newTestServerWithProcessDir(t *testing.T) (ts *httptest.Server, filamentDir, processDir string, srv *webui.Server) {
+	t.Helper()
+	ts, filamentDir, srv = newTestServerWithLiveDir(t)
+
+	processRepo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { processRepo.Close() })
+
+	processDir = t.TempDir()
+	flattenProcessFixturesInto(t, processDir)
+
+	srv.ProcessSvc = &service.Service{
+		Repo:       processRepo,
+		Adapter:    &bambuadapter.LocalAdapter{Dir: processDir, IsStudioRunning: func() (bool, error) { return false, nil }},
+		Detector:   reconcile.RewriteDetector{},
+		NewID:      newTestID,
+		BackupsDir: t.TempDir(),
+	}
+	srv.ProcessUserDir = processDir
+	return ts, filamentDir, processDir, srv
+}
+
 func newTestServerWithLiveDir(t *testing.T) (*httptest.Server, string, *webui.Server) {
 	t.Helper()
 	repo, err := sqlite.Open(":memory:")
@@ -243,6 +294,197 @@ func TestBackgroundPollerDetectsRecognitionWithoutManualCheck(t *testing.T) {
 			t.Fatalf("deployment did not reach ACTIVE via background polling within 2s: %s", body)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestCopyProcessAlreadyCompatibleNeedsNoCopy covers the real-world common
+// case for process profiles: the user's leaf inherits from "0.20mm Standard
+// @BBL X1C", whose compatible_printers already includes P1S (confirmed
+// against the real system catalog — there is no separate "@BBL P1S" process
+// profile at all). Nothing should be published; the preview must say so.
+func TestCopyProcessAlreadyCompatibleNeedsNoCopy(t *testing.T) {
+	ts, _, _, _ := newTestServerWithProcessDir(t)
+
+	resp, err := http.PostForm(ts.URL+"/copy/process/preview", map[string][]string{
+		"name":          {"Syscode - 0.20mm Standard @BBL X1C"},
+		"printer_token": {"P1S 0.4|Bambu Lab P1S 0.4 nozzle"},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/process/preview: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "Nothing to copy") {
+		t.Fatalf("preview did not report already-compatible: %s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `action="/copy/process/publish"`) {
+		t.Fatalf("preview offered a publish form when nothing should be copied: %s", bodyStr)
+	}
+}
+
+// TestCopyProcessPreviewToPublishToCheckRecognitionEndToEnd covers the case
+// where the target printer genuinely isn't covered by the source's
+// compatible_printers (A1 vs X1C's list) — FindCandidateParentsByCompatiblePrinters
+// must find the real "@BBL A1" sibling under the same family root, not by
+// name-token matching (there'd be nothing to match: process profile names
+// don't follow filament's one-per-exact-printer convention).
+func TestCopyProcessPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
+	ts, _, processDir, _ := newTestServerWithProcessDir(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	previewResp, err := http.PostForm(ts.URL+"/copy/process/preview", map[string][]string{
+		"name":          {"Syscode - 0.20mm Standard @BBL X1C"},
+		"printer_token": {"A1 0.4|Bambu Lab A1 0.4 nozzle"},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/process/preview: %v", err)
+	}
+	defer previewResp.Body.Close()
+	previewBody, _ := io.ReadAll(previewResp.Body)
+	if !strings.Contains(string(previewBody), "0.20mm Standard @BBL A1") {
+		t.Fatalf("preview missing the matched parent: %s", previewBody)
+	}
+	if !strings.Contains(string(previewBody), `action="/copy/process/publish"`) {
+		t.Fatalf("preview missing the process publish form: %s", previewBody)
+	}
+
+	const newName = "Test Process Copy @A1"
+	publishResp, err := client.PostForm(ts.URL+"/copy/process/publish", map[string][]string{
+		"name":         {"Syscode - 0.20mm Standard @BBL X1C"},
+		"parent":       {"0.20mm Standard @BBL A1"},
+		"confirm_name": {newName},
+	})
+	if err != nil {
+		t.Fatalf("POST /copy/process/publish: %v", err)
+	}
+	defer publishResp.Body.Close()
+	if publishResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /copy/process/publish status = %d, want 200", publishResp.StatusCode)
+	}
+	publishBody, _ := io.ReadAll(publishResp.Body)
+	if !strings.Contains(string(publishBody), ">AWAITING SAVE IN STUDIO<") {
+		t.Fatalf("publish result's final state is not INSTALLED_LOCALLY: %s", publishBody)
+	}
+
+	if _, err := os.Stat(filepath.Join(processDir, newName+".json")); err != nil {
+		t.Fatalf("published process file missing on disk: %v", err)
+	}
+
+	idx := strings.Index(string(publishBody), "/deployments/process/")
+	if idx == -1 {
+		t.Fatalf("publish result missing a process deployment link: %s", publishBody)
+	}
+	rest := string(publishBody)[idx+len("/deployments/process/"):]
+	deploymentID := rest[:strings.IndexAny(rest, "\"'")]
+
+	infoPath := filepath.Join(processDir, newName+".info")
+	if err := os.WriteFile(infoPath, []byte("updated_time = 99999\nsetting_id = GPtest\n"), 0o644); err != nil {
+		t.Fatalf("write .info: %v", err)
+	}
+
+	checkResp, err := client.Post(ts.URL+"/deployments/process/"+deploymentID+"/check", "application/x-www-form-urlencoded", nil)
+	if err != nil {
+		t.Fatalf("POST /deployments/process/%s/check: %v", deploymentID, err)
+	}
+	defer checkResp.Body.Close()
+	if checkResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("POST check status = %d, want 303 redirect", checkResp.StatusCode)
+	}
+
+	finalResp, err := http.Get(ts.URL + "/deployments/process/" + deploymentID)
+	if err != nil {
+		t.Fatalf("GET /deployments/process/%s (final): %v", deploymentID, err)
+	}
+	defer finalResp.Body.Close()
+	finalBody, _ := io.ReadAll(finalResp.Body)
+	if !strings.Contains(string(finalBody), ">VERIFIED<") {
+		t.Fatalf("process deployment did not reach ACTIVE after check-recognition: %s", finalBody)
+	}
+}
+
+// TestCopyFormProcessRoutes404WhenNotConfigured guards the "not wired up"
+// path: without --process-user-dir (the default), the process routes must
+// 404, not panic on a nil ProcessSvc.
+func TestCopyFormProcessRoutes404WhenNotConfigured(t *testing.T) {
+	ts, _, _ := newTestServerWithLiveDir(t) // no ProcessSvc
+
+	resp, err := http.Get(ts.URL + "/copy/process")
+	if err != nil {
+		t.Fatalf("GET /copy/process: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestProfilePreviewFragmentProcessKind covers the hover-preview button on
+// the process copy form (/copy/process) — same fragment endpoint as
+// filament, just resolved against ProcessUserDir/ProcessSystemDirs via
+// ?kind=process.
+func TestProfilePreviewFragmentProcessKind(t *testing.T) {
+	ts, _, _, _ := newTestServerWithProcessDir(t)
+
+	resp, err := http.Get(ts.URL + "/api/profile-preview?kind=process&name=" + url.QueryEscape("Syscode - 0.20mm Standard @BBL X1C"))
+	if err != nil {
+		t.Fatalf("GET /api/profile-preview: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "Syscode - 0.20mm Standard @BBL X1C") {
+		t.Fatalf("fragment missing profile name: %s", body)
+	}
+}
+
+// TestProfilePreviewFragmentProcessKindNotConfigured guards the "not wired
+// up" path: ?kind=process without --process-user-dir must 404, not panic
+// on a nil ProcessSvc.
+func TestProfilePreviewFragmentProcessKindNotConfigured(t *testing.T) {
+	ts, _, _ := newTestServerWithLiveDir(t) // no ProcessSvc
+
+	resp, err := http.Get(ts.URL + "/api/profile-preview?kind=process&name=" + url.QueryEscape("anything"))
+	if err != nil {
+		t.Fatalf("GET /api/profile-preview: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestCompareLiveProcessProfiles covers process profiles showing up in
+// Compare alongside filament — a distinct "liveprocess:" key so a
+// same-named filament and process profile can never collide.
+func TestCompareLiveProcessProfiles(t *testing.T) {
+	ts, _, _, _ := newTestServerWithProcessDir(t)
+
+	formResp, err := http.Get(ts.URL + "/compare")
+	if err != nil {
+		t.Fatalf("GET /compare: %v", err)
+	}
+	defer formResp.Body.Close()
+	formBody, _ := io.ReadAll(formResp.Body)
+	if !strings.Contains(string(formBody), "liveprocess:Syscode - 0.20mm Standard @BBL X1C") {
+		t.Fatalf("compare form missing a live process profile option: %s", formBody)
+	}
+
+	resp, err := http.Get(ts.URL + "/compare?item=" + url.QueryEscape("liveprocess:Syscode - 0.20mm Standard @BBL X1C") +
+		"&item=" + url.QueryEscape("liveprocess:0.20mm Standard @BBL A1"))
+	if err != nil {
+		t.Fatalf("GET /compare?item=liveprocess:...: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "(process)") {
+		t.Fatalf("compare result missing the (process) marker: %s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Wall Loops") {
+		t.Fatalf("compare result missing settings for process profiles: %s", bodyStr)
 	}
 }
 

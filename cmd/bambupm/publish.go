@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -23,6 +24,15 @@ import (
 // see them.
 func defaultBackupsDir(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "backups")
+}
+
+// defaultProcessDBPath derives a sibling db path for process (print)
+// deployments — kept in a wholly separate db/Repo from filament's so
+// process and filament profile IDs never collide (see webui.Server's doc
+// comment on ProcessSvc).
+func defaultProcessDBPath(dbPath string) string {
+	ext := filepath.Ext(dbPath)
+	return strings.TrimSuffix(dbPath, ext) + "-process" + ext
 }
 
 func newUUID() (string, error) {

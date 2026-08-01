@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/syscod3/bambu-profile-manager/internal/domain"
 	"github.com/syscod3/bambu-profile-manager/internal/parser"
@@ -65,24 +66,30 @@ func Resolve(set Set, leaf *domain.RawProfile) (effective *domain.RawProfile, ch
 	return &domain.RawProfile{Name: leaf.Name, Inherits: leaf.Inherits, Fields: fields}, chain, nil
 }
 
-// universalFilamentRoot is the shared base every Bambu material template
-// (fdm_filament_abs, fdm_filament_pla, fdm_filament_pc, ...) ultimately
-// inherits from — confirmed against real system profiles: ABS, PLA, PC, and
-// TPU templates all inherit "fdm_filament_common" directly. Walking all the
-// way to the literal top of a chain lands here for every material, which is
-// useless for telling materials apart — RootAncestorName stops one level
-// short of it instead.
-const universalFilamentRoot = "fdm_filament_common"
+// commonRootSuffix marks the shared base every Bambu profile family
+// ultimately inherits from — confirmed against real system profiles:
+// filament materials (ABS, PLA, PC, TPU, ...) all inherit "fdm_filament_common"
+// directly; process/print profiles have an extra shared layer
+// ("fdm_process_single_common"/"fdm_process_dual_common") above the
+// literal universal root "fdm_process_common". Bambu names every one of
+// these shared layers with a "_common" suffix and nothing else in either
+// catalog does (checked against the full real system directory for both
+// types) — so instead of hardcoding one exact root name, RootAncestorName
+// stops one level short of the first ancestor whose name ends this way.
+// Walking past it collapses every family into one match, which is useless
+// for telling them apart (e.g. every material would match every other).
+const commonRootSuffix = "_common"
 
-// RootAncestorName returns the name of the material-family ancestor at the
-// top of leaf's inherits chain — e.g. "fdm_filament_abs" — independent of
-// any printer/nozzle-specific ancestor in between, and independent of the
-// shared universalFilamentRoot every material eventually inherits (see its
-// doc comment: walking past it collapses every material into one match).
-// Used to match "same material, different printer" candidates without the
-// caller enumerating them by hand. If the chain never reaches
-// universalFilamentRoot (a different vendor's template layout, or a
-// standalone profile), this falls back to the literal top of the chain.
+// RootAncestorName returns the name of the family ancestor at the top of
+// leaf's inherits chain — e.g. "fdm_filament_abs" for a filament profile,
+// "fdm_process_single_0.20" for a process profile — independent of any
+// printer/nozzle-specific ancestor in between, and independent of the
+// shared common root every profile in that catalog eventually inherits
+// (see commonRootSuffix's doc comment). Used to match "same family,
+// different printer" candidates without the caller enumerating them by
+// hand. If the chain never reaches a "_common" ancestor (a different
+// vendor's template layout, or a standalone profile), this falls back to
+// the literal top of the chain.
 func RootAncestorName(set Set, leaf *domain.RawProfile) (string, error) {
 	seen := map[string]bool{}
 	cur := leaf
@@ -94,7 +101,7 @@ func RootAncestorName(set Set, leaf *domain.RawProfile) (string, error) {
 		if cur.Inherits == "" {
 			return cur.Name, nil
 		}
-		if cur.Inherits == universalFilamentRoot {
+		if strings.HasSuffix(cur.Inherits, commonRootSuffix) {
 			return cur.Name, nil
 		}
 		parent, ok := set[cur.Inherits]
