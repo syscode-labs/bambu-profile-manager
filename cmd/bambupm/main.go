@@ -71,10 +71,14 @@ Usage:
       (flattened) fields as JSON. --dir may be passed more than once to
       search several directories (e.g. user + system profile dirs).
 
-  bambupm serve --db <path> --addr :8080 [--user-dir <dir> --system-dir <dir> [...]] [--backups-dir <dir>]
+  bambupm serve --db <path> --addr :8080 [--user-dir <dir>] [--system-dir <dir> [...]]
+                [--machine-dir <dir> [...]] [--backups-dir <dir>]
       Start the local web UI. List/detail/import always work. Pass
       --user-dir (and --system-dir for target-parent matching) to also
-      enable the Copy-to-another-printer and Backups pages.
+      enable Copy-to-another-printer and Backups. --machine-dir (your
+      real printer profile directories, both user and system) populates
+      the "target printer" dropdown with your actual printers instead
+      of guessed tokens.
 
   bambupm publish --db <path> --user-dir <dir> --system-dir <dir> [...]
                   --name "<profile name>" --target <candidate> [...]
@@ -169,6 +173,7 @@ func cmdServe(args []string) {
 	}
 	userDir := flagValue(args, "--user-dir")
 	systemDirs := flagValues(args, "--system-dir")
+	machineDirs := flagValues(args, "--machine-dir")
 	backupsDir := flagValue(args, "--backups-dir")
 	if backupsDir == "" {
 		backupsDir = defaultBackupsDir(dbPath)
@@ -187,7 +192,7 @@ func cmdServe(args []string) {
 		svc.Detector = reconcile.RewriteDetector{}
 		svc.BackupsDir = backupsDir
 	}
-	srv := &webui.Server{Svc: svc, UserDir: userDir, SystemDirs: systemDirs}
+	srv := &webui.Server{Svc: svc, UserDir: userDir, SystemDirs: systemDirs, MachineDirs: machineDirs}
 
 	fmt.Fprintf(os.Stderr, "bambupm web UI listening on %s (db: %s)\n", addr, dbPath)
 	if userDir == "" {

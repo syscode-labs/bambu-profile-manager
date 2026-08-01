@@ -19,31 +19,59 @@ import (
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
 )
 
-// discoverPrinterTokens extracts distinct printer segments from system
-// profile names, e.g. "Bambu ABS @BBL P1S 0.4 nozzle" -> "P1S 0.4 nozzle".
-// These are guaranteed to regex-match in rebind.FindCandidateParents since
-// they're pulled verbatim from the names it searches — better than asking
-// the user to free-type a token that might not exist in any real profile.
-func discoverPrinterTokens(set resolver.Set) []string {
-	seen := map[string]bool{}
-	for name := range set {
-		at := strings.Index(name, "@")
-		if at == -1 {
+// printerModelShortNames maps a machine profile's authoritative
+// "printer_model" field (e.g. "Bambu Lab X1 Carbon", confirmed by resolving
+// a real machine profile's inheritance chain) to the short code Bambu uses
+// inside FILAMENT profile names (e.g. "Bambu ABS @BBL X1C" — that's "X1C",
+// not "X1CARBON"). Most models reduce cleanly by stripping "Bambu Lab " and
+// spaces; these three don't and need an explicit exception.
+var printerModelShortNames = map[string]string{
+	"Bambu Lab X1 Carbon": "X1C",
+	"Bambu Lab A1 mini":   "A1M",
+	"Bambu Lab H2D Pro":   "H2DP",
+}
+
+func shortPrinterToken(printerModel, nozzleDiameter string) string {
+	short, ok := printerModelShortNames[printerModel]
+	if !ok {
+		short = strings.ReplaceAll(strings.TrimPrefix(printerModel, "Bambu Lab "), " ", "")
+	}
+	if nozzleDiameter == "" {
+		return short
+	}
+	return short + " " + nozzleDiameter
+}
+
+// printerOption is one selectable entry in the "target printer" dropdown:
+// Name is the real machine profile's own name (what the user actually
+// called their printer, e.g. "Bambu Lab X1 Carbon 0.4 nozzle - Obsidian
+// HF"), Token is the short code passed to rebind.FindCandidateParents.
+type printerOption struct{ Name, Token string }
+
+// discoverRealPrinters scans the user's actual machine (printer) profiles
+// — not filament profiles — and resolves each one's inheritance chain to
+// get its authoritative printer_model/nozzle_diameter, rather than parsing
+// or guessing from a display name. Profiles with no resolvable
+// printer_model (e.g. internal template fragments) are skipped.
+func discoverRealPrinters(machineSet resolver.Set) []printerOption {
+	var out []printerOption
+	for name, leaf := range machineSet {
+		effective, _, err := resolver.Resolve(machineSet, leaf)
+		if err != nil {
 			continue
 		}
-		rest := name[at+1:] // e.g. "BBL P1S 0.4 nozzle"
-		vendor, printer, ok := strings.Cut(rest, " ")
-		if !ok || vendor == "" || printer == "" {
+		model, _ := effective.Fields["printer_model"].(string)
+		if model == "" {
 			continue
 		}
-		seen[printer] = true
+		nozzle := ""
+		if arr, ok := effective.Fields["nozzle_diameter"].([]any); ok && len(arr) > 0 {
+			nozzle = fmt.Sprint(arr[0])
+		}
+		out = append(out, printerOption{Name: name, Token: shortPrinterToken(model, nozzle)})
 	}
-	tokens := make([]string, 0, len(seen))
-	for t := range seen {
-		tokens = append(tokens, t)
-	}
-	sort.Strings(tokens)
-	return tokens
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // studioWarning checks whether Bambu Studio looks like it's running right
@@ -95,9 +123,9 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
     <label class="block">
       <span class="text-xs font-medium text-zinc-500 mb-1 block">Target printer</span>
       <select name="printer_token" required class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none">
-      {{range .Printers}}<option value="{{.}}">{{.}}</option>{{end}}
+      {{range .Printers}}<option value="{{.Token}}">{{.Name}}</option>{{end}}
       </select>
-      <span class="text-xs text-zinc-400 mt-1 block">Pulled from real profile names in your Bambu Studio system library, so it's guaranteed to match something.</span>
+      <span class="text-xs text-zinc-400 mt-1 block">Your actual printer profiles, resolved to their real model/nozzle.</span>
     </label>
   </div>
   <button type="submit" class="px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition">Find match</button>
@@ -117,16 +145,16 @@ func (s *Server) handleCopyForm(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(names)
 
-	fullSet, err := resolver.LoadDirs(append([]string{s.UserDir}, s.SystemDirs...))
+	machineSet, err := resolver.LoadDirs(s.MachineDirs)
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	printers := discoverPrinterTokens(fullSet)
+	printers := discoverRealPrinters(machineSet)
 
 	data := struct {
 		Names    []string
-		Printers []string
+		Printers []printerOption
 	}{Names: names, Printers: printers}
 	renderPage(w, copyFormTmpl, data, "Copy", "Copy a filament profile to another printer", "Rebind without touching dependency chains yourself.", "copy", s.studioWarning())
 }

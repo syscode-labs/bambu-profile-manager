@@ -33,6 +33,12 @@ type Server struct {
 	// needing to know about it).
 	UserDir    string
 	SystemDirs []string
+	// MachineDirs are the user's + system's printer (machine) profile
+	// directories — a different tree from UserDir/SystemDirs (filament).
+	// Used only to build the real "target printer" list on the copy form;
+	// nothing here is ever staged/published (bambupm manages filament
+	// profiles, not printer profiles — design.md §3).
+	MachineDirs []string
 }
 
 func (s *Server) Routes() http.Handler {
