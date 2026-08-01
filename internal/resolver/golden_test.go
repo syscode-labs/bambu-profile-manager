@@ -109,8 +109,36 @@ func TestRootAncestorNameOnRealFixtureChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RootAncestorName: %v", err)
 	}
-	if root != "fdm_filament_common" {
-		t.Fatalf("root = %q, want %q (the real chain's top: leaf -> ... -> fdm_filament_abs -> fdm_filament_common)", root, "fdm_filament_common")
+	// Stops at the material template, not fdm_filament_common: every
+	// material (ABS, PLA, PC, TPU, ...) shares that universal root, so
+	// walking past it would make every material match every other.
+	if root != "fdm_filament_abs" {
+		t.Fatalf("root = %q, want %q (material template, one level above the shared universal root)", root, "fdm_filament_abs")
+	}
+}
+
+func TestRootAncestorNameDistinguishesMaterials(t *testing.T) {
+	// A PLA chain and a PC chain sharing the same universal root must not
+	// resolve to the same RootAncestorName — this is the exact bug found
+	// running `bambupm copy` against the real system profile directory
+	// (22 unrelated materials all matched "P1S" before this fix).
+	common := &domain.RawProfile{Name: "fdm_filament_common", Fields: map[string]any{"name": "fdm_filament_common"}}
+	pla := &domain.RawProfile{Name: "fdm_filament_pla", Inherits: "fdm_filament_common", Fields: map[string]any{"name": "fdm_filament_pla", "inherits": "fdm_filament_common"}}
+	pc := &domain.RawProfile{Name: "fdm_filament_pc", Inherits: "fdm_filament_common", Fields: map[string]any{"name": "fdm_filament_pc", "inherits": "fdm_filament_common"}}
+	plaLeaf := &domain.RawProfile{Name: "My PLA", Inherits: "fdm_filament_pla", Fields: map[string]any{"name": "My PLA", "inherits": "fdm_filament_pla"}}
+	pcLeaf := &domain.RawProfile{Name: "My PC", Inherits: "fdm_filament_pc", Fields: map[string]any{"name": "My PC", "inherits": "fdm_filament_pc"}}
+	set := Set{"fdm_filament_common": common, "fdm_filament_pla": pla, "fdm_filament_pc": pc, "My PLA": plaLeaf, "My PC": pcLeaf}
+
+	plaRoot, err := RootAncestorName(set, plaLeaf)
+	if err != nil {
+		t.Fatalf("RootAncestorName(PLA): %v", err)
+	}
+	pcRoot, err := RootAncestorName(set, pcLeaf)
+	if err != nil {
+		t.Fatalf("RootAncestorName(PC): %v", err)
+	}
+	if plaRoot == pcRoot {
+		t.Fatalf("PLA and PC both resolved to %q, want distinct material roots", plaRoot)
 	}
 }
 

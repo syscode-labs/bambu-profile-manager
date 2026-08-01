@@ -62,12 +62,24 @@ func Resolve(set Set, leaf *domain.RawProfile) (effective *domain.RawProfile, ch
 	return &domain.RawProfile{Name: leaf.Name, Inherits: leaf.Inherits, Fields: fields}, chain, nil
 }
 
-// RootAncestorName returns the name of the top of leaf's inherits chain —
-// the profile with no further parent. For filament profiles this is the
-// material-family template (e.g. "fdm_filament_abs"), independent of any
-// printer/nozzle-specific ancestor in between. Used to match "same
-// material, different printer" candidates without the caller enumerating
-// them by hand.
+// universalFilamentRoot is the shared base every Bambu material template
+// (fdm_filament_abs, fdm_filament_pla, fdm_filament_pc, ...) ultimately
+// inherits from — confirmed against real system profiles: ABS, PLA, PC, and
+// TPU templates all inherit "fdm_filament_common" directly. Walking all the
+// way to the literal top of a chain lands here for every material, which is
+// useless for telling materials apart — RootAncestorName stops one level
+// short of it instead.
+const universalFilamentRoot = "fdm_filament_common"
+
+// RootAncestorName returns the name of the material-family ancestor at the
+// top of leaf's inherits chain — e.g. "fdm_filament_abs" — independent of
+// any printer/nozzle-specific ancestor in between, and independent of the
+// shared universalFilamentRoot every material eventually inherits (see its
+// doc comment: walking past it collapses every material into one match).
+// Used to match "same material, different printer" candidates without the
+// caller enumerating them by hand. If the chain never reaches
+// universalFilamentRoot (a different vendor's template layout, or a
+// standalone profile), this falls back to the literal top of the chain.
 func RootAncestorName(set Set, leaf *domain.RawProfile) (string, error) {
 	seen := map[string]bool{}
 	cur := leaf
@@ -77,6 +89,9 @@ func RootAncestorName(set Set, leaf *domain.RawProfile) (string, error) {
 		}
 		seen[cur.Name] = true
 		if cur.Inherits == "" {
+			return cur.Name, nil
+		}
+		if cur.Inherits == universalFilamentRoot {
 			return cur.Name, nil
 		}
 		parent, ok := set[cur.Inherits]

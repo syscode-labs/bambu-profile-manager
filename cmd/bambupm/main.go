@@ -38,6 +38,22 @@ func main() {
 		cmdPublish(os.Args[2:])
 	case "check-recognition":
 		cmdCheckRecognition(os.Args[2:])
+	case "copy":
+		cmdCopy(os.Args[2:])
+	case "backups":
+		if len(os.Args) < 3 {
+			usage()
+			os.Exit(2)
+		}
+		switch os.Args[2] {
+		case "list":
+			cmdBackupsList(os.Args[3:])
+		case "restore":
+			cmdBackupsRestore(os.Args[3:])
+		default:
+			usage()
+			os.Exit(2)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -69,9 +85,27 @@ Usage:
 
   bambupm check-recognition --db <path> --deployment-id <id> --user-dir <dir>
       Resume a deployment sitting at INSTALLED_LOCALLY: read the profile's
-      current .info file and check whether Bambu Studio picked it up
-      (decisions.md #5's RewriteDetector — flagged unverified, this is how
-      you verify it empirically).`)
+      current .info file and check whether Bambu Studio picked it up.
+      Trigger confirmed empirically: an explicit Save on the profile in
+      Studio — reopening, selecting, or slicing alone do not bump .info.
+
+  bambupm copy --db <path> --user-dir <dir> --system-dir <dir> [...]
+               --name "<profile name>" --to-printer <token>
+               [--confirm-name "<new name>"]
+      Copy a filament profile to another printer without picking a target
+      parent by hand: auto-matches by material family + printer token
+      (e.g. "P1S"), refuses and lists candidates if ambiguous. Without
+      --confirm-name, only previews the match and a suggested name —
+      nothing is published until you confirm (or edit) that name and
+      re-run with it. Takes an automatic backup before publishing.
+
+  bambupm backups list --db <path> [--backups-dir <dir>]
+      List point-in-time snapshots taken before each publish.
+
+  bambupm backups restore --db <path> --user-dir <dir> --name <snapshot>
+      Restore a snapshot into the live Bambu directory. Non-destructive:
+      overwrites files present in the snapshot, never deletes files added
+      since.`)
 }
 
 func cmdScan(args []string) {
