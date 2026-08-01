@@ -415,8 +415,9 @@ func (s *Server) handleCopyPublish(w http.ResponseWriter, r *http.Request) {
 }
 
 var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Parse(`
-<p class="text-sm text-zinc-500">A deployment only reaches <code class="bg-zinc-100 px-1 rounded">ACTIVE</code> after Bambu Studio has actually
-  confirmed it and the settings still match &mdash; not just because a file was written.</p>
+<p class="text-sm text-zinc-500">A deployment only reaches <code class="bg-zinc-100 px-1 rounded">ACTIVE</code> once Bambu Studio, on this machine, has actually
+  opened and saved the profile and its settings still match &mdash; not just because bambupm wrote the file to disk. This is a local check
+  (it reads the profile's own metadata file); it has nothing to do with Bambu's cloud account sync.</p>
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
   <div class="flex items-center justify-between">
     <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">{{.Deployment.State}}</span>
@@ -431,9 +432,9 @@ var deploymentDetailTmpl = template.Must(template.New("deploymentDetail").Parse(
   </ol>
   {{if eq (print .Deployment.State) "INSTALLED_LOCALLY"}}
   <form method="post" action="/deployments/{{.Deployment.ID}}/check" class="border-t border-zinc-100 pt-4">
-    <p class="text-sm text-zinc-500 mb-3">Reopen Bambu Studio, select the profile, and Save it once &mdash; the confirmed trigger (reopening/selecting/slicing alone don't bump the metadata Studio uses).</p>
-    {{if .JustChecked}}<p class="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 mb-3">Checked just now &mdash; Bambu Studio hasn't picked it up yet. Save it in Studio, then check again.</p>{{end}}
-    <button type="submit" class="px-4 py-2 rounded-lg border border-zinc-300 text-sm font-medium hover:bg-zinc-50 transition">Check recognition</button>
+    <p class="text-sm text-zinc-500 mb-3">Reopen Bambu Studio, select the profile, and Save it once &mdash; the confirmed trigger (reopening/selecting/slicing alone don't bump the local file Studio uses to track it).</p>
+    {{if .JustChecked}}<p class="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 mb-3">No change yet &mdash; Studio hasn't saved this profile on this machine yet. Save it in Studio, then press "Check if Studio picked it up" again.</p>{{end}}
+    <button type="submit" class="px-4 py-2 rounded-lg border border-zinc-300 text-sm font-medium hover:bg-zinc-50 transition">Check if Studio picked it up</button>
   </form>
   {{end}}
 </section>

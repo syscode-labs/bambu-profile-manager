@@ -159,7 +159,7 @@ func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 	}
 	defer detailResp.Body.Close()
 	detailBody, _ := io.ReadAll(detailResp.Body)
-	if !strings.Contains(string(detailBody), "Check recognition") {
+	if !strings.Contains(string(detailBody), "Check if Studio picked it up") {
 		t.Fatalf("deployment detail missing check-recognition action: %s", detailBody)
 	}
 
