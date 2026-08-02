@@ -8,10 +8,10 @@ ARG TARGETOS
 ARG TARGETARCH
 # CGO_ENABLED=0 is safe here: modernc.org/sqlite is a pure-Go SQLite driver
 # (design.md §6), so cross-compiling for amd64/arm64 needs no C toolchain.
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/bambupm ./cmd/bambupm
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/bpm ./cmd/bpm
 
 FROM gcr.io/distroless/static-debian12
-COPY --from=build /out/bambupm /bambupm
+COPY --from=build /out/bpm /bpm
 VOLUME ["/data"]
 EXPOSE 8080
-ENTRYPOINT ["/bambupm", "serve", "--db", "/data/bambupm.db", "--addr", ":8080"]
+ENTRYPOINT ["/bpm", "serve", "--db", "/data/bpm.db", "--addr", ":8080"]

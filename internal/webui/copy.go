@@ -153,6 +153,18 @@ func (s *Server) handleStudioStatus(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, string(studioWarning(s.Svc)))
 }
 
+// handleLaunchStudio backs the "Open Bambu Studio" button on an
+// awaiting-save deployment (real gap found live: bpm could tell you to
+// reopen Studio but not do it for you). Plain text body, not JSON — the
+// button's script only cares whether it succeeded.
+func (s *Server) handleLaunchStudio(w http.ResponseWriter, r *http.Request) {
+	if err := s.launchStudio(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
 <div class="inline-flex rounded-full bg-zinc-100 p-1 text-sm font-medium">
   <a href="/copy" class="px-4 py-1.5 rounded-full transition {{if eq .Kind "filament"}}bg-zinc-900 text-white shadow-sm{{else}}text-zinc-500 hover:text-zinc-800{{end}}">Filament</a>
@@ -165,7 +177,7 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
   </div>
   {{if eq .Kind "filament"}}
   <p class="text-xs text-zinc-500 -mt-2">
-    Pick a filament you already have, and the printer you want it usable under. bambupm looks for a parent profile
+    Pick a filament you already have, and the printer you want it usable under. bpm looks for a parent profile
     that matches both the same material (ABS, PLA, ...) and your target printer &mdash; the same lookup Bambu Studio
     itself would need, done for you. Your settings (color, vendor, temps) carry over either way.
   </p>
@@ -173,7 +185,7 @@ var copyFormTmpl = template.Must(template.New("copyForm").Parse(`
   <p class="text-xs text-zinc-500 -mt-2">
     Pick a process (print) profile you already have, and the printer you want it usable under. Process profiles work
     differently from filament: Bambu often already lists your target printer as compatible on the profile you have
-    (many printers share tuning) &mdash; bambupm checks that first and tells you if there's nothing to copy at all.
+    (many printers share tuning) &mdash; bpm checks that first and tells you if there's nothing to copy at all.
   </p>
   {{end}}
 <form method="post" action="{{if eq .Kind "process"}}/copy/process/preview{{else}}/copy/preview{{end}}" class="space-y-4">
@@ -303,7 +315,7 @@ var copyPreviewTmpl = template.Must(template.New("copyPreview").Parse(`
     <div>
       <p class="font-medium">"{{.PrinterToken}}" isn't listed as compatible with any base profile in this family yet</p>
       {{if .FamilyCandidates}}
-      <p class="text-amber-700/80">These {{len .FamilyCandidates}} profiles share the same family as the one you're copying, but none of them have "{{.PrinterToken}}" in their compatible-printer list &mdash; so bambupm can't verify the result will actually work there, and won't pick one for you. Open a candidate's diff to see what would change, then check its box to have bambupm add "{{.PrinterToken}}" to it and publish.</p>
+      <p class="text-amber-700/80">These {{len .FamilyCandidates}} profiles share the same family as the one you're copying, but none of them have "{{.PrinterToken}}" in their compatible-printer list &mdash; so bpm can't verify the result will actually work there, and won't pick one for you. Open a candidate's diff to see what would change, then check its box to have bpm add "{{.PrinterToken}}" to it and publish.</p>
       {{else}}
       <p class="text-amber-700/80">No profile in your library even shares this one's family &mdash; there's nothing safe to build from.</p>
       {{end}}
@@ -764,13 +776,18 @@ var deploymentStatusTmpl = template.Must(template.New("deploymentStatus").Funcs(
     <p class="text-sm text-zinc-500">
       One step is on you and can't be automated: reopen Bambu Studio, select the profile, and Save it once.
       That's the only thing that updates Studio's own local tracking file &mdash; reopening, selecting, or
-      slicing the profile alone don't, and bambupm has no way to trigger or shortcut a Save inside Studio's UI.
+      slicing the profile alone don't, and bpm has no way to trigger or shortcut a Save inside Studio's UI.
     </p>
     <p class="text-sm text-zinc-500">
-      Everything after that is automatic: bambupm checks this deployment every few seconds in the background and
+      Everything after that is automatic: bpm checks this deployment every few seconds in the background and
       will flip it to <code class="bg-zinc-100 px-1 rounded">ACTIVE</code> (or flag a mismatch) the moment it
       notices &mdash; this page updates itself, no refresh needed.
     </p>
+    <button type="button"
+      onclick="var b=this; b.disabled=true; b.textContent='Opening…'; fetch('/api/launch-studio',{method:'POST'}).then(function(r){ b.textContent = r.ok ? 'Studio opening…' : 'Could not open Studio'; b.disabled = false; }).catch(function(){ b.textContent='Could not open Studio'; b.disabled = false; });"
+      class="px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 transition disabled:opacity-50">
+      Open Bambu Studio
+    </button>
   </div>
   {{end}}
 </section>
@@ -785,7 +802,7 @@ var deploymentStatusTmpl = template.Must(template.New("deploymentStatus").Funcs(
 // until they manually reloaded or clicked into the deployment again).
 var deploymentDetailTmpl = template.Must(deploymentStatusTmpl.New("deploymentDetail").Parse(`
 <p class="text-sm text-zinc-500">A deployment only shows <strong>VERIFIED</strong> once Bambu Studio, on this machine, has actually
-  opened and saved the profile and its settings still match &mdash; not just because bambupm wrote the file to disk. This is a local check
+  opened and saved the profile and its settings still match &mdash; not just because bpm wrote the file to disk. This is a local check
   (it reads the profile's own metadata file); it has nothing to do with Bambu's cloud account sync.</p>
 <div id="deployment-status">{{template "deploymentStatus" .}}</div>
 <script>
@@ -975,7 +992,7 @@ func (s *Server) pollOnce(ctx context.Context) {
 // deployments) on a fixed interval until ctx is canceled. Bambu Studio only
 // updates a profile's local tracking metadata when the user Saves it in
 // Studio's own UI (confirmed empirically — reopening, selecting, or slicing
-// the profile alone do not); bambupm cannot trigger or detect that moment
+// the profile alone do not); bpm cannot trigger or detect that moment
 // except by re-reading the file afterwards, so this is the closest thing to
 // "automatic" available: the user still Saves once in Studio, but no longer
 // has to come back and click a button to notice it.

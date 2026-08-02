@@ -1,4 +1,4 @@
-// bambupm is a minimal CLI over internal/service. It only wires the
+// bpm is a minimal CLI over internal/service. It only wires the
 // read/reversible operations (scan, export) to a real Bambu Studio
 // directory by default — rebind/publish need an explicit --allow-publish
 // flag, since a mistake there writes into a live, shared Bambu Studio
@@ -61,18 +61,18 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `bambupm — Bambu Studio profile manager
+	fmt.Fprintln(os.Stderr, `bpm — Bambu Studio profile manager
 
 Usage:
-  bambupm scan --dir <bambu-user-filament-dir>
+  bpm scan --dir <bambu-user-filament-dir>
       List profiles found in a Bambu Studio user filament directory.
 
-  bambupm resolve --dir <dir> --name "<profile name>"
+  bpm resolve --dir <dir> --name "<profile name>"
       Resolve a profile's full inheritance chain and print the effective
       (flattened) fields as JSON. --dir may be passed more than once to
       search several directories (e.g. user + system profile dirs).
 
-  bambupm serve --db <path> --addr :8080 [--user-dir <dir>] [--system-dir <dir> [...]]
+  bpm serve --db <path> --addr :8080 [--user-dir <dir>] [--system-dir <dir> [...]]
                 [--machine-dir <dir> [...]] [--backups-dir <dir>]
                 [--process-user-dir <dir>] [--process-system-dir <dir> [...]]
       Start the local web UI. List/detail/import always work. Pass
@@ -86,20 +86,20 @@ Usage:
       way, at /copy/process — kept in a separate db from filament
       deployments, derived automatically next to --db.
 
-  bambupm publish --db <path> --user-dir <dir> --system-dir <dir> [...]
+  bpm publish --db <path> --user-dir <dir> --system-dir <dir> [...]
                   --name "<profile name>" --target <candidate> [...]
                   [--target-name "<new profile name>"]
       Rebind a profile and publish it. Bambu Studio must be closed. Stops
       at INSTALLED_LOCALLY (recognition can't happen while Studio is
       closed) — reopen Studio, then run check-recognition.
 
-  bambupm check-recognition --db <path> --deployment-id <id> --user-dir <dir>
+  bpm check-recognition --db <path> --deployment-id <id> --user-dir <dir>
       Resume a deployment sitting at INSTALLED_LOCALLY: read the profile's
       current .info file and check whether Bambu Studio picked it up.
       Trigger confirmed empirically: an explicit Save on the profile in
       Studio — reopening, selecting, or slicing alone do not bump .info.
 
-  bambupm copy --db <path> --user-dir <dir> --system-dir <dir> [...]
+  bpm copy --db <path> --user-dir <dir> --system-dir <dir> [...]
                --name "<profile name>" --to-printer <token>
                [--confirm-name "<new name>"]
       Copy a filament profile to another printer without picking a target
@@ -109,10 +109,10 @@ Usage:
       nothing is published until you confirm (or edit) that name and
       re-run with it. Takes an automatic backup before publishing.
 
-  bambupm backups list --db <path> [--backups-dir <dir>]
+  bpm backups list --db <path> [--backups-dir <dir>]
       List point-in-time snapshots taken before each publish.
 
-  bambupm backups restore --db <path> --user-dir <dir> --name <snapshot>
+  bpm backups restore --db <path> --user-dir <dir> --name <snapshot>
       Restore a snapshot into the live Bambu directory. Non-destructive:
       overwrites files present in the snapshot, never deletes files added
       since.`)
@@ -171,7 +171,7 @@ func cmdResolve(args []string) {
 func cmdServe(args []string) {
 	dbPath := flagValue(args, "--db")
 	if dbPath == "" {
-		dbPath = "bambupm.db"
+		dbPath = "bpm.db"
 	}
 	addr := flagValue(args, "--addr")
 	if addr == "" {
@@ -225,7 +225,7 @@ func cmdServe(args []string) {
 		srv.ProcessSystemDirs = processSystemDirs
 	}
 
-	fmt.Fprintf(os.Stderr, "bambupm web UI listening on %s (db: %s)\n", addr, dbPath)
+	fmt.Fprintf(os.Stderr, "bpm web UI listening on %s (db: %s)\n", addr, dbPath)
 	if userDir == "" {
 		fmt.Fprintln(os.Stderr, "note: --user-dir not set — list/detail/import work, but Copy/Backups pages need it")
 	}

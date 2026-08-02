@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"sort"
 
+	"github.com/syscod3/bambu-profile-manager/internal/bambuadapter"
 	"github.com/syscod3/bambu-profile-manager/internal/resolver"
 	"github.com/syscod3/bambu-profile-manager/internal/service"
 	"github.com/syscod3/bambu-profile-manager/internal/storage"
@@ -67,7 +68,7 @@ type Server struct {
 	// MachineDirs are the user's + system's printer (machine) profile
 	// directories — a different tree from UserDir/SystemDirs (filament).
 	// Used only to build the real "target printer" list on the copy form;
-	// nothing here is ever staged/published (bambupm manages filament
+	// nothing here is ever staged/published (bpm manages filament
 	// profiles, not printer profiles — design.md §3).
 	MachineDirs []string
 
@@ -88,6 +89,19 @@ type Server struct {
 	ProcessSvc        *service.Service
 	ProcessUserDir    string
 	ProcessSystemDirs []string
+
+	// LaunchStudio opens the real Bambu Studio app for the "open Bambu
+	// Studio" button on an awaiting-save deployment. Defaults to
+	// bambuadapter.LaunchStudio (macOS `open -a`) if nil; overridable so
+	// tests don't actually launch the app.
+	LaunchStudio func() error
+}
+
+func (s *Server) launchStudio() error {
+	if s.LaunchStudio != nil {
+		return s.LaunchStudio()
+	}
+	return bambuadapter.LaunchStudio()
 }
 
 // profileKind bundles what the copy/publish/check flow needs for one
@@ -118,6 +132,8 @@ func (s *Server) processKind() (profileKind, bool) {
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /assets/logo.png", handleLogo)
+	mux.HandleFunc("GET /help", s.handleHelp)
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /process", s.handleIndexProcess)
 	mux.HandleFunc("GET /profiles/{id}", s.handleProfile)
@@ -126,6 +142,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /live/process/{name}", s.handleLiveProfileProcess)
 	mux.HandleFunc("GET /api/profile-preview", s.handleProfilePreviewFragment)
 	mux.HandleFunc("GET /api/studio-status", s.handleStudioStatus)
+	mux.HandleFunc("POST /api/launch-studio", s.handleLaunchStudio)
 	mux.HandleFunc("GET /compare", s.handleComparePage)
 	mux.HandleFunc("GET /import", s.handleImportForm)
 	mux.HandleFunc("POST /import", s.handleImport)
@@ -147,40 +164,51 @@ func (s *Server) Routes() http.Handler {
 }
 
 var indexTmpl = template.Must(template.New("index").Parse(`
+<section class="relative overflow-hidden rounded-2xl border border-zinc-200 shadow-sm p-8 bg-gradient-to-br from-zinc-900 via-zinc-900 to-emerald-950">
+  <div class="absolute -right-10 -top-10 w-56 h-56 rounded-full bg-emerald-500/20 blur-3xl"></div>
+  <div class="relative flex items-start gap-4">
+    <img src="/assets/logo.png" alt="" class="w-14 h-14 rounded-2xl shadow-lg shadow-emerald-500/30 shrink-0">
+    <div>
+      <h2 class="text-white text-xl font-semibold tracking-tight">Welcome to Bambu Profile Manager</h2>
+      <p class="text-sm text-zinc-300 leading-relaxed mt-1.5 max-w-xl">
+        Manage your Bambu Studio {{if eq .Kind "process"}}process (print){{else}}filament{{end}} profiles: <strong class="text-white">copy one to another printer</strong> without
+        touching dependency chains by hand, and <strong class="text-white">verify</strong> Bambu Studio actually recognized the result
+        before calling it done &mdash; instead of assuming a file write means success.
+      </p>
+      <a href="/help" class="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-400 hover:text-emerald-300 mt-3">
+        New here? Read the full walkthrough
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </a>
+    </div>
+  </div>
+</section>
+
 <div class="inline-flex rounded-full bg-zinc-100 p-1 text-sm font-medium mb-4">
   <a href="/" class="px-4 py-1.5 rounded-full transition {{if eq .Kind "filament"}}bg-zinc-900 text-white shadow-sm{{else}}text-zinc-500 hover:text-zinc-800{{end}}">Filament</a>
   <a href="/process" class="px-4 py-1.5 rounded-full transition {{if eq .Kind "process"}}bg-zinc-900 text-white shadow-sm{{else}}text-zinc-500 hover:text-zinc-800{{end}}">Process (print)</a>
 </div>
-<section class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6">
-  <p class="text-sm text-zinc-600 leading-relaxed">
-    bambupm tracks your Bambu Studio {{if eq .Kind "process"}}process (print){{else}}filament{{end}} profiles, lets you <strong>copy one to another printer</strong> without
-    touching dependency chains by hand, and <strong>verifies</strong> Bambu Studio actually recognized the result
-    before calling it done &mdash; instead of assuming a file write means success.
-  </p>
-</section>
 
 <div class="grid grid-cols-3 gap-4">
   <a href="{{if eq .Kind "process"}}/copy/process{{else}}/copy{{end}}" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
-    <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/></svg>
+    <div class="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center mb-3 group-hover:bg-emerald-100 transition"><svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/></svg></div>
     <p class="text-sm font-semibold group-hover:text-emerald-700">Copy to another printer</p>
     <p class="text-xs text-zinc-500 mt-1">Pick a profile and a target printer &mdash; the parent chain is matched for you.</p>
   </a>
+  <a href="/compare" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
+    <div class="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center mb-3 group-hover:bg-emerald-100 transition"><svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l7 4-7 4M4 4v16M20 4v16"/></svg></div>
+    <p class="text-sm font-semibold group-hover:text-emerald-700">Compare</p>
+    <p class="text-xs text-zinc-500 mt-1">Diff any two or three {{if eq .Kind "process"}}process{{else}}filament{{end}} profiles side by side.</p>
+  </a>
   {{if eq .Kind "filament"}}
   <a href="/import" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
-    <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
+    <div class="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center mb-3 group-hover:bg-emerald-100 transition"><svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg></div>
     <p class="text-sm font-semibold group-hover:text-emerald-700">Import a bundle</p>
     <p class="text-xs text-zinc-500 mt-1">Bring in a .profilepack exported elsewhere, dependencies and all.</p>
   </a>
   <a href="/backups" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
-    <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+    <div class="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center mb-3 group-hover:bg-emerald-100 transition"><svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></div>
     <p class="text-sm font-semibold group-hover:text-emerald-700">Backups</p>
     <p class="text-xs text-zinc-500 mt-1">Every publish snapshots your directory first &mdash; restore any of them.</p>
-  </a>
-  {{else}}
-  <a href="/compare" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
-    <svg class="w-5 h-5 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l7 4-7 4M4 4v16M20 4v16"/></svg>
-    <p class="text-sm font-semibold group-hover:text-emerald-700">Compare</p>
-    <p class="text-xs text-zinc-500 mt-1">Diff any two or three process profiles side by side.</p>
   </a>
   {{end}}
 </div>
@@ -200,7 +228,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`
   </div>
   {{else}}
   <div class="text-center py-12 text-zinc-400 bg-white rounded-2xl border border-dashed border-zinc-200">
-    <p class="text-sm">No profiles found. {{if eq .Kind "process"}}Point <code class="bg-zinc-100 px-1 rounded">bambupm serve</code> at your Bambu Studio process directory with --process-user-dir.{{else}}Point <code class="bg-zinc-100 px-1 rounded">bambupm serve</code> at your Bambu Studio directory with --user-dir, or Import a bundle.{{end}}</p>
+    <p class="text-sm">No profiles found. {{if eq .Kind "process"}}Point <code class="bg-zinc-100 px-1 rounded">bpm serve</code> at your Bambu Studio process directory with --process-user-dir.{{else}}Point <code class="bg-zinc-100 px-1 rounded">bpm serve</code> at your Bambu Studio directory with --user-dir, or Import a bundle.{{end}}</p>
   </div>
   {{end}}
 </div>
@@ -381,7 +409,7 @@ func (s *Server) renderLiveProfile(w http.ResponseWriter, r *http.Request, kind 
 		Summary []summaryField
 		Color   string
 		Groups  []fieldGroup
-	}{Kind: kind.Key, Name: name, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
+	}{Kind: kind.Key, Name: name, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(kind.Key, fields)}
 	renderPage(w, liveProfileTmpl, data, name, name, "", "profiles", "", false)
 }
 
@@ -411,9 +439,13 @@ func (s *Server) handleProfilePreviewFragment(w http.ResponseWriter, r *http.Req
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
+	kind := "filament"
+	if r.URL.Query().Get("kind") == "process" {
+		kind = "process"
+	}
 	var fields map[string]any
 	var err error
-	if r.URL.Query().Get("kind") == "process" {
+	if kind == "process" {
 		if s.ProcessSvc == nil {
 			http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
 			return
@@ -435,7 +467,7 @@ func (s *Server) handleProfilePreviewFragment(w http.ResponseWriter, r *http.Req
 		Summary []summaryField
 		Color   string
 		Groups  []fieldGroup
-	}{Name: name, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
+	}{Name: name, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(kind, fields)}
 
 	var buf bytes.Buffer
 	if err := previewFragmentTmpl.Execute(&buf, data); err != nil {
@@ -525,7 +557,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		Summary []summaryField
 		Color   string
 		Groups  []fieldGroup
-	}{Profile: p, Latest: latest, All: all, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields(fields)}
+	}{Profile: p, Latest: latest, All: all, Summary: profileSummary(fields), Color: profileColor(fields), Groups: groupedFields("filament", fields)}
 	renderPage(w, profileTmpl, data, p.Name, p.Name, "", "profiles", "", false)
 }
 

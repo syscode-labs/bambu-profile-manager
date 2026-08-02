@@ -1,0 +1,23 @@
+name: Gitleaks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history, not just the current commit
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      # Installed via `go install` rather than gitleaks/gitleaks-action:
+      # that action's v2 requires a paid GITLEAKS_LICENSE for org-owned
+      # repos (free only for personal accounts) — the CLI itself is
+      # Apache-2.0 and free regardless of who owns the repo.
+      - run: go install github.com/gitleaks/gitleaks/v8@latest
+      - run: gitleaks detect --source . --log-opts="--all" -v --redact

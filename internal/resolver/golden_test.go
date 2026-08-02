@@ -120,7 +120,7 @@ func TestRootAncestorNameOnRealFixtureChain(t *testing.T) {
 func TestRootAncestorNameDistinguishesMaterials(t *testing.T) {
 	// A PLA chain and a PC chain sharing the same universal root must not
 	// resolve to the same RootAncestorName — this is the exact bug found
-	// running `bambupm copy` against the real system profile directory
+	// running `bpm copy` against the real system profile directory
 	// (22 unrelated materials all matched "P1S" before this fix).
 	common := &domain.RawProfile{Name: "fdm_filament_common", Fields: map[string]any{"name": "fdm_filament_common"}}
 	pla := &domain.RawProfile{Name: "fdm_filament_pla", Inherits: "fdm_filament_common", Fields: map[string]any{"name": "fdm_filament_pla", "inherits": "fdm_filament_common"}}

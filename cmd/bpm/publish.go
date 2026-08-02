@@ -46,7 +46,7 @@ func newUUID() (string, error) {
 func cmdPublish(args []string) {
 	dbPath := flagValue(args, "--db")
 	if dbPath == "" {
-		dbPath = "bambupm.db"
+		dbPath = "bpm.db"
 	}
 	userDir := flagValue(args, "--user-dir")
 	systemDirs := flagValues(args, "--system-dir")
@@ -110,7 +110,7 @@ func cmdPublish(args []string) {
 	fmt.Printf("deployment: %s\n", result.Deployment.ID)
 	fmt.Printf("state:      %s\n", result.Deployment.State)
 	if result.Snapshot != "" {
-		fmt.Printf("backup:     %s (restore with: bambupm backups restore --db %s --backups-dir %s --user-dir %s --name %s)\n",
+		fmt.Printf("backup:     %s (restore with: bpm backups restore --db %s --backups-dir %s --user-dir %s --name %s)\n",
 			result.Snapshot, dbPath, backupsDir, userDir, result.Snapshot)
 	}
 	if result.Rebind != nil {
@@ -128,7 +128,7 @@ func cmdPublish(args []string) {
 
 	if result.Deployment.State == reconcile.StateInstalledLocally {
 		fmt.Fprintf(os.Stderr, "\nNow reopen Bambu Studio, confirm the profile appears, then run:\n"+
-			"  bambupm check-recognition --db %s --deployment-id %s --user-dir %s\n", dbPath, result.Deployment.ID, userDir)
+			"  bpm check-recognition --db %s --deployment-id %s --user-dir %s\n", dbPath, result.Deployment.ID, userDir)
 	}
 	if err != nil {
 		os.Exit(1)
@@ -138,7 +138,7 @@ func cmdPublish(args []string) {
 func cmdCheckRecognition(args []string) {
 	dbPath := flagValue(args, "--db")
 	if dbPath == "" {
-		dbPath = "bambupm.db"
+		dbPath = "bpm.db"
 	}
 	deploymentID := flagValue(args, "--deployment-id")
 	userDir := flagValue(args, "--user-dir")
@@ -231,7 +231,7 @@ func suggestName(sourceName, printerToken string) string {
 func cmdCopy(args []string) {
 	dbPath := flagValue(args, "--db")
 	if dbPath == "" {
-		dbPath = "bambupm.db"
+		dbPath = "bpm.db"
 	}
 	userDir := flagValue(args, "--user-dir")
 	systemDirs := flagValues(args, "--system-dir")
@@ -263,7 +263,7 @@ func cmdCopy(args []string) {
 	switch len(candidates) {
 	case 0:
 		fmt.Fprintf(os.Stderr, "copy: no matching parent found for printer %q with %q's material. "+
-			"Nothing safe to auto-map — use `bambupm publish --target <name>` with an explicit parent if you know one.\n", printerToken, name)
+			"Nothing safe to auto-map — use `bpm publish --target <name>` with an explicit parent if you know one.\n", printerToken, name)
 		os.Exit(1)
 	case 1:
 		// fall through
@@ -272,7 +272,7 @@ func cmdCopy(args []string) {
 		for _, c := range candidates {
 			fmt.Fprintf(os.Stderr, "  - %s\n", c)
 		}
-		fmt.Fprintln(os.Stderr, "Use `bambupm publish --target <name>` with the one you want.")
+		fmt.Fprintln(os.Stderr, "Use `bpm publish --target <name>` with the one you want.")
 		os.Exit(1)
 	}
 
@@ -334,7 +334,7 @@ func cmdCopy(args []string) {
 	}
 	if result.Deployment.State == reconcile.StateInstalledLocally {
 		fmt.Fprintf(os.Stderr, "\nNow reopen Bambu Studio, select the new profile, and Save it once to trigger recognition, then run:\n"+
-			"  bambupm check-recognition --db %s --deployment-id %s --user-dir %s\n", dbPath, result.Deployment.ID, userDir)
+			"  bpm check-recognition --db %s --deployment-id %s --user-dir %s\n", dbPath, result.Deployment.ID, userDir)
 	}
 	if err != nil {
 		os.Exit(1)
@@ -344,7 +344,7 @@ func cmdCopy(args []string) {
 func cmdBackupsList(args []string) {
 	dbPath := flagValue(args, "--db")
 	if dbPath == "" {
-		dbPath = "bambupm.db"
+		dbPath = "bpm.db"
 	}
 	backupsDir := flagValue(args, "--backups-dir")
 	if backupsDir == "" {
@@ -368,7 +368,7 @@ func cmdBackupsList(args []string) {
 func cmdBackupsRestore(args []string) {
 	dbPath := flagValue(args, "--db")
 	if dbPath == "" {
-		dbPath = "bambupm.db"
+		dbPath = "bpm.db"
 	}
 	backupsDir := flagValue(args, "--backups-dir")
 	if backupsDir == "" {

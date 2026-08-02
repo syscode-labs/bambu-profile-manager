@@ -57,7 +57,7 @@ func TestGroupedFieldsBucketsByCategory(t *testing.T) {
 		"fan_speed":          "100",          // Cooling
 		"random_advanced_x":  "1",            // Advanced
 	}
-	groups := groupedFields(fields)
+	groups := groupedFields("filament", fields)
 	titles := map[string]bool{}
 	for _, g := range groups {
 		titles[g.Title] = true
@@ -65,6 +65,37 @@ func TestGroupedFieldsBucketsByCategory(t *testing.T) {
 	for _, want := range []string{"Basic", "Temperature", "Cooling", "Advanced"} {
 		if !titles[want] {
 			t.Errorf("groupedFields missing category %q, got groups: %+v", want, groups)
+		}
+	}
+}
+
+// TestGroupedFieldsUsesProcessCategoriesForProcessKind covers the real bug
+// found live: process profiles were bucketed with filament's category
+// scheme (Basic/Temperature/Cooling/Flow & Retraction/Advanced), which has
+// no real match for process-only fields like wall_loops or support
+// settings — they all landed in "Advanced", making a process comparison
+// read as if filament categories were being applied to it.
+func TestGroupedFieldsUsesProcessCategoriesForProcessKind(t *testing.T) {
+	fields := map[string]any{
+		"layer_height":          "0.2",  // Basic
+		"wall_loops":            "3",    // Layers & Perimeters
+		"sparse_infill_density": "15%",  // Infill
+		"support_type":          "tree", // Support
+		"outer_wall_speed":      "200",  // Speed
+	}
+	groups := groupedFields("process", fields)
+	byTitle := map[string]bool{}
+	for _, g := range groups {
+		byTitle[g.Title] = true
+	}
+	for _, want := range []string{"Basic", "Layers & Perimeters", "Infill", "Support", "Speed"} {
+		if !byTitle[want] {
+			t.Errorf("groupedFields(process) missing category %q, got groups: %+v", want, groups)
+		}
+	}
+	for _, notWant := range []string{"Temperature", "Cooling", "Flow & Retraction"} {
+		if byTitle[notWant] {
+			t.Errorf("groupedFields(process) should not use filament category %q, got groups: %+v", notWant, groups)
 		}
 	}
 }
@@ -79,7 +110,7 @@ func TestCompareItemsMarksDiffersAcrossThree(t *testing.T) {
 	a := map[string]any{"nozzle_temperature": "250", "same": "x"}
 	b := map[string]any{"nozzle_temperature": "260", "same": "x"}
 	c := map[string]any{"nozzle_temperature": "250", "same": "x"}
-	groups := compareItems([]map[string]any{a, b, c})
+	groups := compareItems("filament", []map[string]any{a, b, c})
 
 	var found bool
 	for _, g := range groups {
@@ -106,7 +137,7 @@ func TestCompareItemsMarksDiffersAcrossThree(t *testing.T) {
 func TestCompareItemsMarksNotSetWhenMissing(t *testing.T) {
 	a := map[string]any{"only_in_a": "x"}
 	b := map[string]any{}
-	groups := compareItems([]map[string]any{a, b})
+	groups := compareItems("filament", []map[string]any{a, b})
 	var found bool
 	for _, g := range groups {
 		for _, row := range g.Rows {

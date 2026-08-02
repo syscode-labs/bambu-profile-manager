@@ -142,3 +142,104 @@ func TestImportThenListThenDetail(t *testing.T) {
 		t.Fatalf("deployments page for a profile with no publishes should say so: %s", buf3.String())
 	}
 }
+
+// TestCompareIsAPageCardNotASidebarItem covers the move: Compare used to be
+// its own sidebar nav entry (shown on every page regardless of relevance);
+// it's now a card on each kind's own index page instead, alongside Copy —
+// filament's index previously had no Compare card at all, only process's
+// did.
+func TestCompareIsAPageCardNotASidebarItem(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	indexResp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer indexResp.Body.Close()
+	indexBody := new(bytes.Buffer)
+	indexBody.ReadFrom(indexResp.Body)
+	if !strings.Contains(indexBody.String(), `href="/compare"`) {
+		t.Fatalf("filament index page missing a Compare card: %s", indexBody.String())
+	}
+
+	// A page with no Compare card of its own must not still carry the old
+	// standalone sidebar link.
+	copyResp, err := http.Get(ts.URL + "/copy")
+	if err != nil {
+		t.Fatalf("GET /copy: %v", err)
+	}
+	defer copyResp.Body.Close()
+	copyBody := new(bytes.Buffer)
+	copyBody.ReadFrom(copyResp.Body)
+	if strings.Contains(copyBody.String(), `href="/compare"`) {
+		t.Fatalf("sidebar still links to /compare directly: %s", copyBody.String())
+	}
+}
+
+// TestSidebarLogoLinksHome covers the real gap: the sidebar logo/title
+// block wasn't a link at all, so a page with no explicit "Profiles" nav
+// highlight (e.g. Help) had no obvious way back to the landing page.
+func TestSidebarLogoLinksHome(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/help")
+	if err != nil {
+		t.Fatalf("GET /help: %v", err)
+	}
+	defer resp.Body.Close()
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+	if !strings.Contains(body.String(), `<a href="/" class="px-5 py-5 flex items-center`) {
+		t.Fatalf("sidebar logo/title block is not a link to home: %s", body.String())
+	}
+}
+
+// TestLogoAssetServed covers the embedded app icon: served from the binary
+// itself (go:embed), not a file the deployment has to remember to ship.
+func TestLogoAssetServed(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/assets/logo.png")
+	if err != nil {
+		t.Fatalf("GET /assets/logo.png: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
+		t.Fatalf("Content-Type = %q, want image/png", ct)
+	}
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+	if body.Len() < 100 {
+		t.Fatalf("logo body suspiciously small: %d bytes", body.Len())
+	}
+}
+
+// TestHelpPageCoversTheRealWorkflows covers the walkthrough page existing
+// and actually explaining the non-obvious parts (the lifecycle states, why
+// Studio has to be reopened manually, Docker's Studio-running caveat).
+func TestHelpPageCoversTheRealWorkflows(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/help")
+	if err != nil {
+		t.Fatalf("GET /help: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+	bodyStr := body.String()
+	for _, want := range []string{
+		"AWAITING SAVE", "SEMANTIC_MISMATCH", "reopen Bambu Studio", "docker compose up",
+		"the container can", "check-recognition",
+	} {
+		if !strings.Contains(bodyStr, want) {
+			t.Errorf("help page missing expected content %q", want)
+		}
+	}
+}

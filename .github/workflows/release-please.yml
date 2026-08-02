@@ -1,0 +1,25 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # googleapis/release-please-action is Apache-2.0, free for personal
+      # and org-owned repos alike — no license gate (see gitleaks.yml's
+      # comment for the contrast). On merge to main it opens/updates a
+      # release PR from Conventional Commits; merging that PR tags a
+      # release, which release.yml (tag-triggered) then builds and
+      # publishes binaries for.
+      - uses: googleapis/release-please-action@v4
+        with:
+          release-type: simple
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -37,12 +37,12 @@ jobs:
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          out="bambupm-${GOOS}-${GOARCH}${ext}"
-          go build -o "$out" ./cmd/bambupm
+          out="bpm-${GOOS}-${GOARCH}${ext}"
+          go build -o "$out" ./cmd/bpm
           echo "ARTIFACT=$out" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
-          name: bambupm-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: bpm-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ env.ARTIFACT }}
 
   release:

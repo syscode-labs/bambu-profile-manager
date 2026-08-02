@@ -1,7 +1,7 @@
 // Package service wires domain -> storage -> bundle -> rebind -> bambuadapter
 // -> reconcile together into the flows described in design.md §22 (the
 // primary acceptance test) and §25 (first spike deliverable). It's the
-// integration layer cmd/bambupm and the future web UI both call into.
+// integration layer cmd/bpm and the future web UI both call into.
 package service
 
 import (

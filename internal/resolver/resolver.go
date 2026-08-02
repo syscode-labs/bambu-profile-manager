@@ -114,7 +114,7 @@ func RootAncestorName(set Set, leaf *domain.RawProfile) (string, error) {
 
 // LoadDirs scans every *.json file directly under each dir (non-recursive,
 // matching bambuadapter.Discover) into one Set keyed by name. Shared by
-// cmd/bambupm and internal/webui so both build a Set from the same real
+// cmd/bpm and internal/webui so both build a Set from the same real
 // Bambu Studio directories the same way.
 func LoadDirs(dirs []string) (Set, error) {
 	set := Set{}

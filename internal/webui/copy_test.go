@@ -3,6 +3,7 @@ package webui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -151,7 +152,7 @@ func TestCopyFormListsLiveProfiles(t *testing.T) {
 }
 
 // TestCopyPreviewOffersUnverifiedPublishWhenNoCandidateFound covers the
-// escape hatch for when bambupm genuinely cannot find a safe parent (real
+// escape hatch for when bpm genuinely cannot find a safe parent (real
 // case found live: a 0.20mm-layer-height process profile has no compatible
 // parent for a 0.2mm-nozzle printer anywhere in Bambu's own catalog, since
 // that combination doesn't physically exist) — user asked to still be able
@@ -165,7 +166,7 @@ func TestCopyPreviewOffersFamilyCandidatesWithDiffWhenNoVerifiedMatch(t *testing
 	// TestFindCandidateParentsNoMatchForWrongMaterial), so this is a
 	// genuine zero-verified-candidate case — but the profile's own real
 	// material family (fdm_filament_abs) does have real, existing sibling
-	// profiles bambupm can offer instead of a dead end.
+	// profiles bpm can offer instead of a dead end.
 	previewResp, err := http.PostForm(ts.URL+"/copy/preview", map[string][]string{
 		"name":          {"Syscode - AmazonBasics ABS 0.6"},
 		"printer_token": {"P1P"},
@@ -343,6 +344,9 @@ func TestCopyPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 	detailBody, _ := io.ReadAll(detailResp.Body)
 	if !strings.Contains(string(detailBody), "can't be automated") {
 		t.Fatalf("deployment detail missing the Save-in-Studio explanation: %s", detailBody)
+	}
+	if !strings.Contains(string(detailBody), "Open Bambu Studio") || !strings.Contains(string(detailBody), "/api/launch-studio") {
+		t.Fatalf("deployment detail missing the Open Bambu Studio button: %s", detailBody)
 	}
 
 	// Simulate Studio having saved the profile (bumps .info — the confirmed
@@ -620,7 +624,7 @@ func TestCopyProcessPreviewToPublishToCheckRecognitionEndToEnd(t *testing.T) {
 // heuristic added live: FindCandidateParentsByCompatiblePrinters can return
 // several equally "compatible" base profiles (e.g. real "Standard" vs
 // "High Quality" system leaves under the same nozzle), leaving the user to
-// guess which one the source profile was actually built on. bambupm now
+// guess which one the source profile was actually built on. bpm now
 // picks the one requiring the fewest setting changes and marks it
 // "Suggested", first in the list.
 func TestCopyProcessPreviewSuggestsClosestCandidateWhenAmbiguous(t *testing.T) {
@@ -745,6 +749,9 @@ func TestCompareLiveProcessProfiles(t *testing.T) {
 	if !strings.Contains(string(formBody), "liveprocess:Syscode - 0.20mm Standard @BBL X1C") {
 		t.Fatalf("compare form missing a live process profile option: %s", formBody)
 	}
+	if !strings.Contains(string(formBody), `<optgroup label="Filament">`) || !strings.Contains(string(formBody), `<optgroup label="Process (print)">`) {
+		t.Fatalf("compare form missing Filament/Process optgroups: %s", formBody)
+	}
 
 	resp, err := http.Get(ts.URL + "/compare?item=" + url.QueryEscape("liveprocess:Syscode - 0.20mm Standard @BBL X1C") +
 		"&item=" + url.QueryEscape("liveprocess:0.20mm Standard @BBL A1"))
@@ -754,8 +761,8 @@ func TestCompareLiveProcessProfiles(t *testing.T) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
-	if !strings.Contains(bodyStr, "(process)") {
-		t.Fatalf("compare result missing the (process) marker: %s", bodyStr)
+	if !strings.Contains(bodyStr, ">process<") {
+		t.Fatalf("compare result missing the process-kind badge: %s", bodyStr)
 	}
 	if !strings.Contains(bodyStr, "Wall Loops") {
 		t.Fatalf("compare result missing settings for process profiles: %s", bodyStr)
@@ -996,6 +1003,46 @@ func TestStudioStatusEndpointReflectsLiveChange(t *testing.T) {
 	}
 }
 
+// TestLaunchStudioEndpoint covers the "Open Bambu Studio" button's backend:
+// a bare POST that shells out to launch the real app. LaunchStudio is
+// injected so the test never actually runs `open -a`.
+func TestLaunchStudioEndpoint(t *testing.T) {
+	repo, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	svc := &service.Service{Repo: repo, NewID: newTestID}
+	var called bool
+	launchErr := error(nil)
+	srv := &webui.Server{Svc: svc, LaunchStudio: func() error { called = true; return launchErr }}
+	ts := httptest.NewServer(srv.Routes())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/api/launch-studio", "", nil)
+	if err != nil {
+		t.Fatalf("POST /api/launch-studio: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if !called {
+		t.Fatal("LaunchStudio was not invoked")
+	}
+
+	launchErr = errors.New("open: no such app")
+	resp, err = http.Post(ts.URL+"/api/launch-studio", "", nil)
+	if err != nil {
+		t.Fatalf("POST /api/launch-studio (failure case): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 when the launch fails", resp.StatusCode)
+	}
+}
+
 // TestCompareAcrossThreeDifferentProfiles proves /compare works across any
 // profiles (not just revisions of the same one), up to 3 at once, and
 // highlights rows that differ while leaving identical rows unhighlighted.
@@ -1054,7 +1101,7 @@ func TestCompareAcrossThreeDifferentProfiles(t *testing.T) {
 }
 
 // TestIndexShowsUntrackedLiveProfiles guards against the real gap found
-// after shipping: the landing page only listed profiles bambupm's own db
+// after shipping: the landing page only listed profiles bpm's own db
 // had recorded (via Import/Copy), not everything actually present in the
 // user's Bambu Studio directory. With --user-dir set, untracked profiles
 // must still appear, marked as such, and be viewable read-only via /live.

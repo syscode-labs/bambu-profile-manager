@@ -25,46 +25,54 @@ var shellTmpl = template.Must(template.New("shell").Parse(`<!doctype html>
 <head>
 <meta charset="utf-8">
 <title>{{.Title}} &middot; Bambu Profile Manager</title>
+<link rel="icon" type="image/png" href="/assets/logo.png">
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>body{font-family:'Inter',system-ui,sans-serif}::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:#d4d4d8;border-radius:4px}</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:#d4d4d8;border-radius:4px}
+  ::-webkit-scrollbar-thumb:hover{background:#a1a1aa}
+  .bpm-sidebar{background:linear-gradient(180deg,#18181b 0%,#0c0c0e 100%)}
+  .bpm-glow{box-shadow:0 0 0 1px rgba(16,185,129,.15),0 8px 24px -8px rgba(16,185,129,.35)}
+</style>
 </head>
 <body class="bg-zinc-50 text-zinc-900 min-h-screen flex">
 
-<aside class="w-60 shrink-0 bg-zinc-900 text-zinc-300 flex flex-col fixed inset-y-0">
-  <div class="px-5 py-5 flex items-center gap-2 border-b border-zinc-800">
-    <div class="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-zinc-900 font-bold text-sm">B</div>
-    <span class="text-white font-semibold text-sm">Profile Manager</span>
-  </div>
+<aside class="bpm-sidebar w-60 shrink-0 text-zinc-300 flex flex-col fixed inset-y-0">
+  <a href="/" class="px-5 py-5 flex items-center gap-2.5 border-b border-white/5 hover:bg-white/5 transition" title="Home">
+    <img src="/assets/logo.png" alt="" class="w-9 h-9 rounded-xl bpm-glow shrink-0">
+    <span class="text-white font-semibold text-sm leading-tight">Bambu<br>Profile Manager</span>
+  </a>
   <nav class="flex-1 px-3 py-4 space-y-1 text-sm">
-    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "profiles"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800 hover:text-white{{end}}" href="/">
+    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "profiles"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800/70 hover:text-white{{end}}" href="/">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/></svg>
       Profiles
     </a>
-    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "import"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800 hover:text-white{{end}}" href="/import">
+    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "import"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800/70 hover:text-white{{end}}" href="/import">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
       Import bundle
     </a>
-    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "copy"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800 hover:text-white{{end}}" href="/copy">
+    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "copy"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800/70 hover:text-white{{end}}" href="/copy">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/></svg>
       Copy to Printer
     </a>
-    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "compare"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800 hover:text-white{{end}}" href="/compare">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l7 4-7 4M4 4v16M20 4v16"/></svg>
-      Compare
-    </a>
-    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "backups"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800 hover:text-white{{end}}" href="/backups">
+    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "backups"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800/70 hover:text-white{{end}}" href="/backups">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
       Backups
     </a>
+    <a class="flex items-center gap-3 px-3 py-2 rounded-lg transition {{if eq .Active "help"}}bg-zinc-800 text-white font-medium{{else}}text-zinc-400 hover:bg-zinc-800/70 hover:text-white{{end}}" href="/help">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      Help
+    </a>
   </nav>
-  <div class="px-4 py-3 border-t border-zinc-800 text-xs text-zinc-500">bambupm &middot; local</div>
+  <div class="px-4 py-3 border-t border-white/5 text-xs text-zinc-500">bpm &middot; local</div>
 </aside>
 
 <main class="flex-1 ml-60 overflow-y-auto">
   <header class="sticky top-0 z-10 bg-zinc-50/90 backdrop-blur border-b border-zinc-200 px-8 py-4">
-    <h1 class="text-lg font-semibold">{{.HeaderTitle}}</h1>
+    <h1 class="text-lg font-semibold tracking-tight">{{.HeaderTitle}}</h1>
     {{if .HeaderSubtitle}}<p class="text-sm text-zinc-500">{{.HeaderSubtitle}}</p>{{end}}
   </header>
   <div class="px-8 py-6 max-w-3xl space-y-6">

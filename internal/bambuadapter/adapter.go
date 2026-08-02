@@ -67,6 +67,19 @@ func PgrepStudioRunning() (bool, error) {
 	return false, fmt.Errorf("bambuadapter: pgrep: %w", err)
 }
 
+// LaunchStudio opens the real Bambu Studio app via macOS's `open`, the same
+// mechanism Finder/Spotlight use — no window management, no waiting for it
+// to finish starting, just the launch request itself. Same best-effort,
+// macOS-only caveat as PgrepStudioRunning: `open` succeeding only means the
+// OS accepted the launch request, not that Studio finished starting or even
+// that "Bambu Studio.app" exists under that exact name.
+func LaunchStudio() error {
+	if err := exec.Command("open", "-a", "Bambu Studio").Run(); err != nil {
+		return fmt.Errorf("bambuadapter: launch Bambu Studio: %w", err)
+	}
+	return nil
+}
+
 // LocalAdapter is the filesystem-based Bambu Studio adapter (design.md §15
 // "Initial strategy").
 type LocalAdapter struct {

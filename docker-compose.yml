@@ -1,18 +1,41 @@
 services:
-  bambupm:
+  bpm:
     build: .
-    image: bambupm:local
+    image: bpm:local
     ports:
       - "8080:8080"
     volumes:
-      - bambupm-data:/data
-      # Uncomment to give the CLI's future rebind/publish commands access to
-      # your real Bambu Studio profile directory (design.md §5's
-      # bind-mounted /bambu-user). Not required for `serve` (web UI) alone —
-      # see README's "Known limitations" section before using this for
-      # publish: the Studio-running safety check can't see host processes
-      # from inside a container.
-      # - ~/Library/Application Support/BambuStudio/user/<your-account-id>:/bambu-user
+      - bpm-data:/data
+      # Uncomment these (and the matching `command:` flags below) to give
+      # the web UI access to your real Bambu Studio profile directories —
+      # required for Copy, Compare's live tab, and Backups; list/import/
+      # detail already work without them. Replace <account-id> with the
+      # folder name under Bambu Studio's own "user" directory. One real
+      # limitation, not fixable from in here: the container can't see
+      # processes running on your host, so the "Bambu Studio is running"
+      # safety check can't see a host-side Studio — close Studio yourself
+      # before publishing when running this way (see /help in the app, or
+      # README's "Known limitations").
+      #
+      # - ~/Library/Application Support/BambuStudio/user/<account-id>/filament:/bambu/user-filament
+      # - ~/Library/Application Support/BambuStudio/system/BBL/filament:/bambu/system-filament:ro
+      # - ~/Library/Application Support/BambuStudio/user/<account-id>/process:/bambu/user-process
+      # - ~/Library/Application Support/BambuStudio/system/BBL/process:/bambu/system-process:ro
+      # - ~/Library/Application Support/BambuStudio/user/<account-id>/machine:/bambu/user-machine
+      # - ~/Library/Application Support/BambuStudio/system/BBL/machine:/bambu/system-machine:ro
+    # command:
+    #   - "--user-dir"
+    #   - "/bambu/user-filament"
+    #   - "--system-dir"
+    #   - "/bambu/system-filament"
+    #   - "--process-user-dir"
+    #   - "/bambu/user-process"
+    #   - "--process-system-dir"
+    #   - "/bambu/system-process"
+    #   - "--machine-dir"
+    #   - "/bambu/user-machine"
+    #   - "--machine-dir"
+    #   - "/bambu/system-machine"
 
 volumes:
-  bambupm-data:
+  bpm-data:
