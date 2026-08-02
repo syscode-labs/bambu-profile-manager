@@ -215,6 +215,23 @@ func TestSidebarLogoLinksHome(t *testing.T) {
 	}
 }
 
+// TestSidebarFooterLinksToRepo covers the authoring/repo notes footer at
+// the bottom of the sidebar, shown on every page.
+func TestSidebarFooterLinksToRepo(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+	if !strings.Contains(body.String(), `href="https://github.com/syscode-labs/bambu-profile-manager"`) {
+		t.Fatalf("sidebar footer missing a link to the GitHub repo: %s", body.String())
+	}
+}
+
 // TestLogoAssetServed covers the embedded app icon: served from the binary
 // itself (go:embed), not a file the deployment has to remember to ship.
 func TestLogoAssetServed(t *testing.T) {
