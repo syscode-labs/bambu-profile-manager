@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="internal/webui/assets/logo.png" alt="Bambu Profile Manager logo" width="96">
+</p>
+
 # Bambu Profile Manager
 
 [![CI](https://github.com/syscode-labs/bambu-profile-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/syscode-labs/bambu-profile-manager/actions/workflows/ci.yml)
