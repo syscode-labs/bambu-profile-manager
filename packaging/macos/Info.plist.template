@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Bambu Profile Manager</string>
+	<string>Bambu Profile Manager (bpm)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Bambu Profile Manager</string>
+	<string>Bambu Profile Manager (bpm)</string>
 	<key>CFBundleIdentifier</key>
 	<string>uk.syscode-labs.bpm-tray</string>
 	<key>CFBundleExecutable</key>
