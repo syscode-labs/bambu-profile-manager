@@ -6,7 +6,7 @@
 
 > Experimental — under active development.
 
-A local tool for managing Bambu Studio **filament** and **process (print)** profiles: copy one to another printer or nozzle without hand-editing an `inherits` chain, and get a built-in check that Bambu Studio actually picked up the result — a file landing on disk isn't treated as success until Studio itself confirms it. Ships as a single Go binary with a local web UI, or as a scriptable CLI.
+Bambu Studio stores your filament and print settings as profiles that inherit from each other. Want to use a profile you tuned on one printer on a different printer or nozzle? Normally you'd copy it by hand and hope you picked the right base to inherit from. `bpm` (short for **b**ambu **p**rofile **m**anager) does that copy for you, then checks that Bambu Studio actually loaded it — not just that a file landed on disk.
 
 ## Stack
 
@@ -14,61 +14,66 @@ A local tool for managing Bambu Studio **filament** and **process (print)** prof
 |---|---|
 | Go | Application language |
 | `modernc.org/sqlite` | Pure-Go SQLite driver — no C toolchain needed to build or cross-compile |
-| `net/http` + `html/template` | Web UI: server-rendered pages, plain page reloads, no build step |
+| `net/http` + `html/template` | Web UI: plain server-rendered pages, no JavaScript build step |
 | Docker (multi-stage) | Packaging, amd64/arm64 |
 
 ## Getting started
 
-Requires Go 1.25+.
+Pick whichever install method is easiest for you.
+
+**Homebrew (macOS/Linux):**
 
 ```bash
-go build ./...
-go test ./...
+brew install syscode-labs/public/bpm
+bpm serve --db bpm.db --addr :8080
 ```
 
-Run the web UI locally:
+**From source (requires Go 1.25+):**
 
 ```bash
-go run ./cmd/bpm serve --db bpm.db --addr :8080
+git clone https://github.com/syscode-labs/bambu-profile-manager.git
+cd bambu-profile-manager
+make install   # builds bpm and puts it on your PATH
+bpm serve --db bpm.db --addr :8080
 ```
 
-Then open `http://localhost:8080`. List/import/detail work immediately; add `--user-dir`/`--system-dir` (and `--process-user-dir`/`--process-system-dir` for process profiles) pointed at your real Bambu Studio directories to unlock Copy, Compare's live tab, and Backups — see `bpm serve --help`-equivalent usage below, or the in-app **Help** page.
+Run `make help` to see every other command (`build`, `test`, `run`, `docker`, `clean`).
 
-Or with Docker:
+**Docker:**
 
 ```bash
 docker compose up --build
 ```
 
-`docker-compose.yml` has commented bind mounts and flags for your real Bambu Studio directories — uncomment and fill in your account ID to enable the same Copy/Compare/Backups features as a native run.
+Whichever way you start it, open `http://localhost:8080`. Listing, viewing, and importing profiles works right away. To copy profiles between printers or restore a backup, add `--user-dir`/`--system-dir` (filament) and `--process-user-dir`/`--process-system-dir` (process/print) pointing at your real Bambu Studio directories — see the in-app **Help** page for exactly where those live and what each flag does.
 
 ## Day-to-day usage
 
-Everything below also works through the web UI — the CLI is for scripting/headless use.
+Everything below also works through the web UI — the CLI is for scripting or running headless.
 
 Scan a Bambu Studio profile directory:
 
 ```bash
-go run ./cmd/bpm scan --dir "$HOME/Library/Application Support/BambuStudio/user/<your-account-id>/filament"
+bpm scan --dir "$HOME/Library/Application Support/BambuStudio/user/<your-account-id>/filament"
 ```
 
-Copy a filament profile to another printer, auto-matching the base profile by material + printer:
+Copy a filament profile to another printer, picking the right base profile for you:
 
 ```bash
-go run ./cmd/bpm copy --db bpm.db \
+bpm copy --db bpm.db \
   --user-dir "$HOME/Library/Application Support/BambuStudio/user/<your-account-id>/filament" \
   --system-dir "$HOME/Library/Application Support/BambuStudio/system/BBL/filament" \
   --name "My Custom Filament" --to-printer P1S
 ```
 
-Previews and prints a suggested name; nothing publishes until you re-run with `--confirm-name`. Publishing requires Bambu Studio closed, takes an automatic backup first, and stops at `INSTALLED_LOCALLY` until you reopen Studio and Save — then resume with `check-recognition`. See the in-app **Help** page for the full lifecycle explanation.
+This only shows you what it *would* do and a suggested name — nothing is published until you re-run with `--confirm-name`. Publishing needs Bambu Studio closed, takes an automatic backup first, and stops once the file is written — reopen Studio, save the profile once, then run `check-recognition` to confirm it took. The in-app **Help** page walks through why that one manual step can't be skipped.
 
-Export/import portable `.profilepack` bundles, resolve a profile's effective settings, or manage backups — see the CLI reference below, or run `go run ./cmd/bpm` with no arguments for the full flag-by-flag usage text.
+See the CLI reference below, or run `bpm` with no arguments, for everything else (export/import bundles, resolve a profile's effective settings, manage backups).
 
 ## Known limitations
 
-- **The Studio-running safety check can't see host processes from inside a container.** `internal/bambuadapter`'s publish guard shells out to `pgrep` to refuse publishing while Bambu Studio is open (see `openspec/changes/init-profile-manager/decisions.md` #4). From inside Docker, that check only sees processes in the container's own PID namespace — it will never detect Bambu Studio running on the host. Close Studio yourself before publishing when running via Docker.
-- Round-trip verification against a real Bambu Studio installation needs a human to close and reopen Studio — it isn't automatable end to end (see `openspec/changes/init-profile-manager/decisions.md`).
+- **Running via Docker, the "is Bambu Studio open?" safety check can't see your host machine.** It only sees processes inside the container, so it will never notice Bambu Studio running on your actual computer. Close Studio yourself before publishing if you're using the Docker image.
+- Confirming that Bambu Studio picked up a change needs a human to close and reopen Studio — there's no way to automate that part.
 
 <details>
 <summary>CLI reference</summary>
