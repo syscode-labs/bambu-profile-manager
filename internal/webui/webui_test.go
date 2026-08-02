@@ -176,6 +176,27 @@ func TestCompareIsAPageCardNotASidebarItem(t *testing.T) {
 	}
 }
 
+// TestIndexNoLongerHasARedundantBackupsCard covers the real complaint: the
+// index page had its own "Backups" card duplicating the sidebar's Backups
+// nav item, which was already the actual, working way to reach it — remove
+// the redundant page-body copy, keep the sidebar as the one path in.
+func TestIndexNoLongerHasARedundantBackupsCard(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+	// The sidebar's own Backups nav link legitimately contains href="/backups"
+	// on every page — check for the card's distinguishing copy instead.
+	if strings.Contains(body.String(), "Every publish snapshots your directory first") {
+		t.Fatalf("index page still has its own Backups card: %s", body.String())
+	}
+}
+
 // TestSidebarLogoLinksHome covers the real gap: the sidebar logo/title
 // block wasn't a link at all, so a page with no explicit "Profiles" nav
 // highlight (e.g. Help) had no obvious way back to the landing page.

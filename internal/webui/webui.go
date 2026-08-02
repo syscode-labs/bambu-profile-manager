@@ -160,6 +160,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /deployments/process/{id}/check", s.handleCheckRecognitionProcess)
 	mux.HandleFunc("GET /backups", s.handleBackupsList)
 	mux.HandleFunc("POST /backups/{name}/restore", s.handleBackupRestore)
+	mux.HandleFunc("GET /backups/process", s.handleBackupsListProcess)
+	mux.HandleFunc("POST /backups/process/{name}/restore", s.handleBackupRestoreProcess)
 	return mux
 }
 
@@ -204,11 +206,6 @@ var indexTmpl = template.Must(template.New("index").Parse(`
     <div class="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center mb-3 group-hover:bg-emerald-100 transition"><svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg></div>
     <p class="text-sm font-semibold group-hover:text-emerald-700">Import a bundle</p>
     <p class="text-xs text-zinc-500 mt-1">Bring in a .profilepack exported elsewhere, dependencies and all.</p>
-  </a>
-  <a href="/backups" class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 hover:border-emerald-300 hover:shadow-md transition group">
-    <div class="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center mb-3 group-hover:bg-emerald-100 transition"><svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></div>
-    <p class="text-sm font-semibold group-hover:text-emerald-700">Backups</p>
-    <p class="text-xs text-zinc-500 mt-1">Every publish snapshots your directory first &mdash; restore any of them.</p>
   </a>
   {{end}}
 </div>
