@@ -47,10 +47,20 @@ jobs:
           # .tar.gz filename is versioned) so the Homebrew formula's
           # `bin.install "bpm-tray"` finds it - matches how goreleaser's own
           # archives contain a plain "bpm", not "bpm_vX_os_arch".
+          #
+          # MACOSX_DEPLOYMENT_TARGET matters here: real bug found live - left
+          # unset, the macos-latest runner's cgo linker embeds whatever its
+          # own SDK defaults to (observed: minos 26.0) into the binary's
+          # LC_BUILD_VERSION load command. `open`/LaunchServices enforces
+          # that against the *running* OS - unlike a direct exec, which
+          # ignores it - so the resulting .app failed to launch via Finder/
+          # Spotlight on any real Mac not yet running that OS version, while
+          # still running fine from a terminal. Pinned to 11.0 to match
+          # Info.plist.template's LSMinimumSystemVersion.
           for arch in arm64 amd64; do
             dir="dist-tray/darwin_${arch}"
             mkdir -p "$dir"
-            CGO_ENABLED=1 GOARCH=$arch go build -o "$dir/bpm-tray" ./cmd/bpm-tray
+            MACOSX_DEPLOYMENT_TARGET=11.0 CGO_ENABLED=1 GOARCH=$arch go build -o "$dir/bpm-tray" ./cmd/bpm-tray
             tar -C "$dir" -czf "dist-tray/bpm-tray_${{ github.ref_name }}_darwin_${arch}.tar.gz" bpm-tray
           done
       - name: Build AppIcon.icns from the embedded logo
