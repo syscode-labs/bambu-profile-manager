@@ -6,7 +6,7 @@
 
 > Experimental — under active development.
 
-A local tool for managing Bambu Studio **filament** and **process (print)** profiles: copy one to another printer or nozzle without hand-editing an `inherits` chain, and get a built-in check that Bambu Studio actually recognized the result — instead of just assuming a file write succeeded. Ships as a single Go binary with a local web UI, or as a scriptable CLI.
+A local tool for managing Bambu Studio **filament** and **process (print)** profiles: copy one to another printer or nozzle without hand-editing an `inherits` chain, and get a built-in check that Bambu Studio actually picked up the result — a file landing on disk isn't treated as success until Studio itself confirms it. Ships as a single Go binary with a local web UI, or as a scriptable CLI.
 
 ## Stack
 

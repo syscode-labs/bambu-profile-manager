@@ -173,9 +173,9 @@ var indexTmpl = template.Must(template.New("index").Parse(`
     <div>
       <h2 class="text-white text-xl font-semibold tracking-tight">Welcome to Bambu Profile Manager</h2>
       <p class="text-sm text-zinc-300 leading-relaxed mt-1.5 max-w-xl">
-        Manage your Bambu Studio {{if eq .Kind "process"}}process (print){{else}}filament{{end}} profiles: <strong class="text-white">copy one to another printer</strong> without
-        touching dependency chains by hand, and <strong class="text-white">verify</strong> Bambu Studio actually recognized the result
-        before calling it done &mdash; instead of assuming a file write means success.
+        Manage your Bambu Studio filament and process (print) profiles: <strong class="text-white">copy one to another printer</strong> without
+        touching dependency chains by hand, and <strong class="text-white">verify</strong> Bambu Studio actually picked up the result &mdash;
+        a file landing on disk isn't treated as success until Studio itself confirms it.
       </p>
       <a href="/help" class="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-400 hover:text-emerald-300 mt-3">
         New here? Read the full walkthrough
