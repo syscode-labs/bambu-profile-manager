@@ -53,7 +53,31 @@ jobs:
             CGO_ENABLED=1 GOARCH=$arch go build -o "$dir/bpm-tray" ./cmd/bpm-tray
             tar -C "$dir" -czf "dist-tray/bpm-tray_${{ github.ref_name }}_darwin_${arch}.tar.gz" bpm-tray
           done
+      - name: Build AppIcon.icns from the embedded logo
+        run: |
+          mkdir -p /tmp/icon.iconset
+          for size in 16 32 128 256 512; do
+            sips -z $size $size internal/webui/assets/logo.png --out /tmp/icon.iconset/icon_${size}x${size}.png >/dev/null
+            double=$((size*2))
+            sips -z $double $double internal/webui/assets/logo.png --out /tmp/icon.iconset/icon_${size}x${size}@2x.png >/dev/null
+          done
+          iconutil -c icns /tmp/icon.iconset -o /tmp/AppIcon.icns
+      - name: Assemble BpmTray.app for both architectures
+        run: |
+          version="${{ github.ref_name }}"
+          version="${version#v}"
+          for arch in arm64 amd64; do
+            app="dist-tray/darwin_${arch}/BpmTray.app"
+            mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+            sed "s/VERSION_PLACEHOLDER/${version}/" packaging/macos/Info.plist.template > "$app/Contents/Info.plist"
+            cp "dist-tray/darwin_${arch}/bpm-tray" "$app/Contents/MacOS/bpm-tray"
+            cp /tmp/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+            plutil -lint "$app/Contents/Info.plist"
+            ditto -c -k --sequesterRsrc --keepParent "$app" "dist-tray/BpmTray_${{ github.ref_name }}_darwin_${arch}.zip"
+          done
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.ref_name }} dist-tray/*.tar.gz --clobber
+        run: |
+          gh release upload ${{ github.ref_name }} dist-tray/*.tar.gz --clobber
+          gh release upload ${{ github.ref_name }} dist-tray/*.zip --clobber

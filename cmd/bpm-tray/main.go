@@ -30,8 +30,19 @@ func main() {
 }
 
 func onReady() {
-	systray.SetIcon(webui.LogoPNG)
+	// Template icon: a flat black silhouette with real alpha, so macOS tints
+	// it correctly for the light/dark menu bar - the full-colour app icon
+	// (via plain SetIcon) rendered as an illegible colour blob at actual
+	// menu bar size. regularIconBytes (LogoPNG) is only a fallback for
+	// platforms without template-icon support; bpm-tray only ships for
+	// macOS, so it's never actually shown.
+	systray.SetTemplateIcon(webui.LogoTemplatePNG, webui.LogoPNG)
 	systray.SetTooltip("Bambu Profile Manager")
+
+	// A single click opens the web UI directly - no menu to navigate first.
+	// Right-click (the systray default when SetOnTapped is set) still shows
+	// the menu below, so Quit stays reachable.
+	systray.SetOnTapped(openBrowser)
 
 	mOpen := systray.AddMenuItem("Open bpm", "Open the web UI in your browser")
 	mStatus := systray.AddMenuItem("Starting…", "")
@@ -51,13 +62,17 @@ func onReady() {
 		for {
 			select {
 			case <-mOpen.ClickedCh:
-				exec.Command("open", "http://localhost"+addr).Start()
+				openBrowser()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
 			}
 		}
 	}()
+}
+
+func openBrowser() {
+	exec.Command("open", "http://localhost"+addr).Start()
 }
 
 // startServer wires up the same server cmd/bpm's `serve` builds, but with
