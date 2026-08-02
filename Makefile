@@ -24,6 +24,11 @@ test: ## Run the test suite
 run: build ## Build and start the web UI on http://localhost:8080
 	./bin/$(BINARY) serve --db bpm.db --addr :8080
 
+.PHONY: tray
+tray: ## Build and run the macOS menu bar app (auto-discovers your Bambu Studio dirs)
+	go build -o bin/bpm-tray ./cmd/bpm-tray
+	./bin/bpm-tray
+
 .PHONY: docker
 docker: ## Build the Docker image (see docker-compose.yml to run it)
 	docker compose build

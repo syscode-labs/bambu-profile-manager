@@ -26,3 +26,31 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # bpm-tray (macOS menu bar app) needs Cocoa via cgo, so it can't cross-
+  # compile from the ubuntu runner above like bpm's CGO_ENABLED=0 build
+  # does — built separately on a real macOS runner and appended to the
+  # release goreleaser already created.
+  tray:
+    needs: release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Build bpm-tray for both Apple Silicon and Intel
+        run: |
+          mkdir -p dist-tray
+          for arch in arm64 amd64; do
+            name="bpm-tray_${{ github.ref_name }}_darwin_${arch}"
+            CGO_ENABLED=1 GOARCH=$arch go build -o "dist-tray/$name" ./cmd/bpm-tray
+            tar -C dist-tray -czf "dist-tray/${name}.tar.gz" "$name"
+            rm "dist-tray/$name"
+          done
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} dist-tray/*.tar.gz --clobber
