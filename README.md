@@ -30,19 +30,18 @@ Three ways to run it — pick whichever fits:
 
 ```bash
 brew install syscode-labs/public/bpm
-bpm serve --db bpm.db --addr :8080
 ```
 
 That one command is enough — Homebrew adds the `syscode-labs/public` tap automatically the first time, no separate `brew tap` step needed.
 
-On macOS, install the menu bar app too — a small icon that runs the same web UI instead of a terminal command, and finds your real Bambu Studio directories on its own (no flags needed):
+- **On Linux**, this installs the `bpm` CLI. Run `bpm serve --db bpm.db --addr :8080`.
+- **On macOS**, this installs *both*: the `bpm` CLI, and "Bambu Profile Manager" — a menu bar app that runs the same web UI as a small icon instead of a terminal command, in `/Applications`/Launchpad/Spotlight like any other app. Open it once:
+  ```bash
+  open "/Applications/Bambu Profile Manager.app"
+  ```
+  It finds your real Bambu Studio directories on its own (no flags needed). Click its icon to open the web UI; right-click for status and Quit. It's unsigned (no Apple Developer account), so installing it removes the Gatekeeper quarantine flag automatically — you shouldn't see an "unidentified developer" warning.
 
-```bash
-brew install --cask syscode-labs/public/bpm-tray
-open /Applications/BpmTray.app
-```
-
-It's now in Launchpad/Spotlight like any other app. Click its icon to open the web UI; right-click for status and Quit. It's unsigned (no Apple Developer account), so the cask removes the Gatekeeper quarantine flag automatically on install — you shouldn't see an "unidentified developer" warning. Prefer building it yourself? `make tray`, or grab the standalone binary from the [latest release](https://github.com/syscode-labs/bambu-profile-manager/releases/latest).
+Prefer building the menu bar app yourself instead of Homebrew? `make tray`, or grab the standalone `.app` from the [latest release](https://github.com/syscode-labs/bambu-profile-manager/releases/latest).
 
 **2. Docker:**
 
