@@ -52,6 +52,10 @@ docker compose up --build
 
 Whichever way you start it, open `http://localhost:8080`. Listing, viewing, and importing profiles works right away. To copy profiles between printers or restore a backup, add `--user-dir`/`--system-dir` (filament) and `--process-user-dir`/`--process-system-dir` (process/print) pointing at your real Bambu Studio directories — see the in-app **Help** page for exactly where those live and what each flag does.
 
+**macOS menu bar app:**
+
+`bpm-tray` runs the same web UI as a small icon in your menu bar instead of a terminal command — no flags to remember, it finds your real Bambu Studio directories on its own. Download it from the [latest release](https://github.com/syscode-labs/bambu-profile-manager/releases/latest), or build it yourself with `make tray`. Click the icon to open the web UI or quit.
+
 ## Day-to-day usage
 
 Everything below also works through the web UI — the CLI is for scripting or running headless.
