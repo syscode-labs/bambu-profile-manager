@@ -19,5 +19,7 @@ jobs:
       # that action's v2 requires a paid GITLEAKS_LICENSE for org-owned
       # repos (free only for personal accounts) — the CLI itself is
       # Apache-2.0 and free regardless of who owns the repo.
-      - run: go install github.com/gitleaks/gitleaks/v8@latest
+      # Module path is zricethezav/gitleaks/v8 (the GitHub repo moved to the
+      # gitleaks org, but the Go module path didn't follow).
+      - run: go install github.com/zricethezav/gitleaks/v8@latest
       - run: gitleaks detect --source . --log-opts="--all" -v --redact
