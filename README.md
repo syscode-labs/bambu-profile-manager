@@ -35,7 +35,14 @@ bpm serve --db bpm.db --addr :8080
 
 That one command is enough — Homebrew adds the `syscode-labs/public` tap automatically the first time, no separate `brew tap` step needed.
 
-On macOS this also installs `bpm-tray` — a menu bar app that runs the same web UI as a small icon instead of a terminal command, and finds your real Bambu Studio directories on its own (no flags needed). Just run `bpm-tray` once; click its icon to open the web UI or quit. `make tray` builds it from source instead, or grab it standalone from the [latest release](https://github.com/syscode-labs/bambu-profile-manager/releases/latest) if you're not using Homebrew.
+On macOS, install the menu bar app too — a small icon that runs the same web UI instead of a terminal command, and finds your real Bambu Studio directories on its own (no flags needed):
+
+```bash
+brew install --cask syscode-labs/public/bpm-tray
+open /Applications/BpmTray.app
+```
+
+It's now in Launchpad/Spotlight like any other app. Click its icon to open the web UI; right-click for status and Quit. It's unsigned (no Apple Developer account), so the cask removes the Gatekeeper quarantine flag automatically on install — you shouldn't see an "unidentified developer" warning. Prefer building it yourself? `make tray`, or grab the standalone binary from the [latest release](https://github.com/syscode-labs/bambu-profile-manager/releases/latest).
 
 **2. Docker:**
 
