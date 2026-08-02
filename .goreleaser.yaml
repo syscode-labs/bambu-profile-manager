@@ -1,0 +1,57 @@
+version: 2
+
+project_name: bpm
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: bpm
+    main: ./cmd/bpm
+    binary: bpm
+    env:
+      - CGO_ENABLED=0 # modernc.org/sqlite is pure-Go, no C toolchain needed to cross-compile
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    ids:
+      - bpm
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  header: |
+    ## bpm {{ .Tag }}
+  footer: |
+    Verify downloads with `checksums.txt`.
+
+    Install via Homebrew: `brew install syscode-labs/public/bpm`
