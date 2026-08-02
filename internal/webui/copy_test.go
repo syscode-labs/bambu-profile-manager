@@ -881,6 +881,67 @@ func TestBackupsListAndRestoreEndToEnd(t *testing.T) {
 	}
 }
 
+// TestProcessBackupsListAndRestoreEndToEnd covers the real gap found live:
+// every process publish takes its own real backup snapshot on disk
+// (Service.BackupsDir is set per kind in cmd/bpm's serve wiring), but the
+// web UI's /backups page only ever showed and could restore filament's —
+// process snapshots were piling up with no way to see or use them.
+func TestProcessBackupsListAndRestoreEndToEnd(t *testing.T) {
+	ts, _, processDir, _ := newTestServerWithProcessDir(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	if _, err := client.PostForm(ts.URL+"/copy/process/publish", map[string][]string{
+		"name":         {"Syscode - 0.20mm Standard @BBL X1C"},
+		"parent":       {"0.20mm Standard @BBL A1"},
+		"confirm_name": {"Process Backup Test @A1"},
+	}); err != nil {
+		t.Fatalf("POST /copy/process/publish: %v", err)
+	}
+
+	listResp, err := http.Get(ts.URL + "/backups/process")
+	if err != nil {
+		t.Fatalf("GET /backups/process: %v", err)
+	}
+	defer listResp.Body.Close()
+	listBody, _ := io.ReadAll(listResp.Body)
+	if !strings.Contains(string(listBody), `action="/backups/process/`) {
+		t.Fatalf("process backups list missing a restore form pointed at the process route: %s", listBody)
+	}
+
+	idx := strings.Index(string(listBody), `action="/backups/process/`)
+	rest := string(listBody)[idx+len(`action="/backups/process/`):]
+	snapshotName := rest[:strings.Index(rest, "/restore")]
+
+	target := filepath.Join(processDir, "0.20mm Standard @BBL X1C.json")
+	original, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read original: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("corrupted"), 0o644); err != nil {
+		t.Fatalf("corrupt file: %v", err)
+	}
+
+	restoreResp, err := client.Post(ts.URL+"/backups/process/"+snapshotName+"/restore", "application/x-www-form-urlencoded", nil)
+	if err != nil {
+		t.Fatalf("POST process restore: %v", err)
+	}
+	defer restoreResp.Body.Close()
+	if restoreResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("restore status = %d, want 303", restoreResp.StatusCode)
+	}
+	if loc := restoreResp.Header.Get("Location"); loc != "/backups/process" {
+		t.Fatalf("restore redirect = %q, want /backups/process (not filament's /backups)", loc)
+	}
+
+	restored, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read restored: %v", err)
+	}
+	if string(restored) != string(original) {
+		t.Fatalf("restored content does not match original snapshot")
+	}
+}
+
 // TestStudioRunningWarningShownAndPublishBlocked proves the UI actually
 // warns before publishing and refuses (with a clear callout, not a raw
 // error) when Bambu Studio looks like it's running — the gap flagged after

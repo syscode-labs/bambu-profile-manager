@@ -1009,16 +1009,26 @@ func (s *Server) PollRecognition(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// backupsTmpl is shared by filament and process kinds — every publish of
+// either kind takes its own snapshot (Service.BackupsDir is set per kind,
+// see cmd/bpm's serve wiring), but until this the web UI only ever showed
+// and could restore filament's: process publishes were silently building up
+// real, restorable snapshots on disk with no way to see or use them here.
 var backupsTmpl = template.Must(template.New("backups").Parse(`
+<div class="inline-flex rounded-full bg-zinc-100 p-1 text-sm font-medium mb-4">
+  <a href="/backups" class="px-4 py-1.5 rounded-full transition {{if eq .Kind "filament"}}bg-zinc-900 text-white shadow-sm{{else}}text-zinc-500 hover:text-zinc-800{{end}}">Filament</a>
+  <a href="/backups/process" class="px-4 py-1.5 rounded-full transition {{if eq .Kind "process"}}bg-zinc-900 text-white shadow-sm{{else}}text-zinc-500 hover:text-zinc-800{{end}}">Process (print)</a>
+</div>
 <p class="text-sm text-zinc-500">Restoring overwrites files present in that snapshot but never deletes anything added since &mdash; safe to restore an old one without losing newer work.</p>
 <section class="bg-white rounded-2xl border border-zinc-200 shadow-sm divide-y divide-zinc-100">
+{{$restorePrefix := .RestorePrefix}}
 {{range .List}}
 <div class="flex items-center justify-between px-5 py-3.5">
   <div>
     <p class="text-sm font-medium">{{.At.Format "2006-01-02 15:04:05 MST"}}</p>
     <code class="text-xs text-zinc-400">{{.Name}}</code>
   </div>
-  <form method="post" action="/backups/{{.Name}}/restore">
+  <form method="post" action="{{$restorePrefix}}{{.Name}}/restore">
     <button type="submit" onclick="return confirm('Restore this snapshot? Overwrites files present in it, does not delete anything added since.')"
       class="px-3 py-1.5 rounded-lg border border-zinc-300 text-xs font-medium hover:bg-zinc-50 transition">Restore</button>
   </form>
@@ -1028,20 +1038,54 @@ var backupsTmpl = template.Must(template.New("backups").Parse(`
 `))
 
 func (s *Server) handleBackupsList(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Svc.ListBackups()
+	s.renderBackupsList(w, r, s.filamentKind())
+}
+
+func (s *Server) handleBackupsListProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderBackupsList(w, r, kind)
+}
+
+func (s *Server) renderBackupsList(w http.ResponseWriter, r *http.Request, kind profileKind) {
+	list, err := kind.Svc.ListBackups()
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	data := struct{ List any }{List: list}
-	renderPage(w, backupsTmpl, data, "Backups", "Backups", "Point-in-time snapshots taken automatically before every publish.", "backups", studioWarning(s.Svc), true)
+	restorePrefix := "/backups/"
+	if kind.Key == "process" {
+		restorePrefix = "/backups/process/"
+	}
+	data := struct {
+		Kind          string
+		List          any
+		RestorePrefix string
+	}{Kind: kind.Key, List: list, RestorePrefix: restorePrefix}
+	renderPage(w, backupsTmpl, data, "Backups", "Backups", "Point-in-time snapshots taken automatically before every publish.", "backups", studioWarning(kind.Svc), true)
 }
 
 func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
+	s.renderBackupRestore(w, r, s.filamentKind(), "/backups")
+}
+
+func (s *Server) handleBackupRestoreProcess(w http.ResponseWriter, r *http.Request) {
+	kind, ok := s.processKind()
+	if !ok {
+		http.Error(w, "process profiles are not configured (serve without --process-user-dir)", http.StatusNotFound)
+		return
+	}
+	s.renderBackupRestore(w, r, kind, "/backups/process")
+}
+
+func (s *Server) renderBackupRestore(w http.ResponseWriter, r *http.Request, kind profileKind, redirectTo string) {
 	name := r.PathValue("name")
-	if err := s.Svc.RestoreBackup(name); err != nil {
+	if err := kind.Svc.RestoreBackup(name); err != nil {
 		httpError(w, err)
 		return
 	}
-	http.Redirect(w, r, "/backups", http.StatusSeeOther)
+	http.Redirect(w, r, redirectTo, http.StatusSeeOther)
 }
