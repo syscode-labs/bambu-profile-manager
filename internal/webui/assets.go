@@ -14,6 +14,16 @@ import (
 //go:embed assets/logo.png
 var LogoPNG []byte
 
+// LogoTemplatePNG is a monochrome (black-on-transparent) silhouette derived
+// from LogoPNG, cropped and downsized for use as a macOS menu bar "template"
+// image — those get tinted/inverted automatically for the light/dark menu
+// bar, but only if they're a flat black shape with real alpha, not a full
+// colour icon (real gap found live: SetIcon with the full-colour app icon
+// rendered as a tiny, illegible blob at menu bar size).
+//
+//go:embed assets/logo-template.png
+var LogoTemplatePNG []byte
+
 // handleLogo serves LogoPNG over HTTP. Aggressively cacheable: the file
 // only changes on a new build, and go:embed gives every build a fresh byte
 // slice anyway.
