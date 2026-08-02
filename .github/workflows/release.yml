@@ -72,12 +72,16 @@ jobs:
             sips -z $double $double internal/webui/assets/logo.png --out /tmp/icon.iconset/icon_${size}x${size}@2x.png >/dev/null
           done
           iconutil -c icns /tmp/icon.iconset -o /tmp/AppIcon.icns
-      - name: Assemble BpmTray.app for both architectures
+      - name: Assemble Bambu Profile Manager.app for both architectures
         run: |
           version="${{ github.ref_name }}"
           version="${version#v}"
           for arch in arm64 amd64; do
-            app="dist-tray/darwin_${arch}/BpmTray.app"
+            # The .app folder itself is named "Bambu Profile Manager.app"
+            # (that's what shows in Launchpad/Spotlight/Finder) - the release
+            # asset's own filename stays the technical "BpmTray_..." for a
+            # stable download URL across renames.
+            app="dist-tray/darwin_${arch}/Bambu Profile Manager.app"
             mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
             sed "s/VERSION_PLACEHOLDER/${version}/" packaging/macos/Info.plist.template > "$app/Contents/Info.plist"
             cp "dist-tray/darwin_${arch}/bpm-tray" "$app/Contents/MacOS/bpm-tray"
