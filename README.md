@@ -35,9 +35,9 @@ brew install syscode-labs/public/bpm
 That one command is enough — Homebrew adds the `syscode-labs/public` tap automatically the first time, no separate `brew tap` step needed.
 
 - **On Linux**, this installs the `bpm` CLI. Run `bpm serve --db bpm.db --addr :8080`.
-- **On macOS**, this installs *both*: the `bpm` CLI, and "Bambu Profile Manager" — a menu bar app that runs the same web UI as a small icon instead of a terminal command, in `/Applications`/Launchpad/Spotlight like any other app. Open it once:
+- **On macOS**, this installs *both*: the `bpm` CLI, and "Bambu Profile Manager (bpm)" — a menu bar app that runs the same web UI as a small icon instead of a terminal command, in `/Applications`/Launchpad/Spotlight like any other app. Open it once:
   ```bash
-  open "/Applications/Bambu Profile Manager.app"
+  open "/Applications/Bambu Profile Manager (bpm).app"
   ```
   It finds your real Bambu Studio directories on its own (no flags needed). Click its icon to open the web UI; right-click for status and Quit. It's unsigned (no Apple Developer account), so installing it removes the Gatekeeper quarantine flag automatically — you shouldn't see an "unidentified developer" warning.
 
