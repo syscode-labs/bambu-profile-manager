@@ -24,16 +24,24 @@ Bambu Studio stores your filament and print settings as profiles that inherit fr
 
 ## Getting started
 
-Pick whichever install method is easiest for you.
+Three ways to run it — pick whichever fits:
 
-**Homebrew (macOS/Linux):**
+**1. Homebrew (macOS/Linux, recommended):**
 
 ```bash
 brew install syscode-labs/public/bpm
 bpm serve --db bpm.db --addr :8080
 ```
 
-**From source (requires Go 1.25+):**
+On macOS this also installs `bpm-tray` — a menu bar app that runs the same web UI as a small icon instead of a terminal command, and finds your real Bambu Studio directories on its own (no flags needed). Just run `bpm-tray` once; click its icon to open the web UI or quit. `make tray` builds it from source instead, or grab it standalone from the [latest release](https://github.com/syscode-labs/bambu-profile-manager/releases/latest) if you're not using Homebrew.
+
+**2. Docker:**
+
+```bash
+docker compose up --build
+```
+
+**3. From source (fallback, requires Go 1.25+):**
 
 ```bash
 git clone https://github.com/syscode-labs/bambu-profile-manager.git
@@ -42,19 +50,9 @@ make install   # builds bpm and puts it on your PATH
 bpm serve --db bpm.db --addr :8080
 ```
 
-Run `make help` to see every other command (`build`, `test`, `run`, `docker`, `clean`).
-
-**Docker:**
-
-```bash
-docker compose up --build
-```
+Run `make help` to see every other command (`build`, `test`, `run`, `tray`, `docker`, `clean`).
 
 Whichever way you start it, open `http://localhost:8080`. Listing, viewing, and importing profiles works right away. To copy profiles between printers or restore a backup, add `--user-dir`/`--system-dir` (filament) and `--process-user-dir`/`--process-system-dir` (process/print) pointing at your real Bambu Studio directories — see the in-app **Help** page for exactly where those live and what each flag does.
-
-**macOS menu bar app:**
-
-`bpm-tray` runs the same web UI as a small icon in your menu bar instead of a terminal command — no flags to remember, it finds your real Bambu Studio directories on its own. Download it from the [latest release](https://github.com/syscode-labs/bambu-profile-manager/releases/latest), or build it yourself with `make tray`. Click the icon to open the web UI or quit.
 
 ## Day-to-day usage
 

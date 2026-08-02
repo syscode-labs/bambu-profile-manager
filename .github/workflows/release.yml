@@ -43,12 +43,15 @@ jobs:
           go-version: "1.25"
       - name: Build bpm-tray for both Apple Silicon and Intel
         run: |
-          mkdir -p dist-tray
+          # Binary inside the archive stays plain "bpm-tray" (only the
+          # .tar.gz filename is versioned) so the Homebrew formula's
+          # `bin.install "bpm-tray"` finds it - matches how goreleaser's own
+          # archives contain a plain "bpm", not "bpm_vX_os_arch".
           for arch in arm64 amd64; do
-            name="bpm-tray_${{ github.ref_name }}_darwin_${arch}"
-            CGO_ENABLED=1 GOARCH=$arch go build -o "dist-tray/$name" ./cmd/bpm-tray
-            tar -C dist-tray -czf "dist-tray/${name}.tar.gz" "$name"
-            rm "dist-tray/$name"
+            dir="dist-tray/darwin_${arch}"
+            mkdir -p "$dir"
+            CGO_ENABLED=1 GOARCH=$arch go build -o "$dir/bpm-tray" ./cmd/bpm-tray
+            tar -C "$dir" -czf "dist-tray/bpm-tray_${{ github.ref_name }}_darwin_${arch}.tar.gz" bpm-tray
           done
       - name: Attach to the release
         env:
