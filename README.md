@@ -6,6 +6,7 @@
 
 [![CI](https://github.com/syscode-labs/bambu-profile-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/syscode-labs/bambu-profile-manager/actions/workflows/ci.yml)
 [![Gitleaks](https://github.com/syscode-labs/bambu-profile-manager/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/syscode-labs/bambu-profile-manager/actions/workflows/gitleaks.yml)
+[![Release](https://img.shields.io/github/v/release/syscode-labs/bambu-profile-manager)](https://github.com/syscode-labs/bambu-profile-manager/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > Experimental — under active development.
