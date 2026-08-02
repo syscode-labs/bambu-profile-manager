@@ -41,27 +41,30 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
-      - name: Build bpm-tray for both Apple Silicon and Intel
+      - name: Build bpm and bpm-tray for both Apple Silicon and Intel
         run: |
-          # Binary inside the archive stays plain "bpm-tray" (only the
-          # .tar.gz filename is versioned) so the Homebrew formula's
-          # `bin.install "bpm-tray"` finds it - matches how goreleaser's own
-          # archives contain a plain "bpm", not "bpm_vX_os_arch".
+          # Both binaries go inside the same .app bundle below, so one
+          # `brew install --cask` gives you the CLI (on PATH via the cask's
+          # `binary` stanza) and the menu bar app together - a plain
+          # Homebrew Formula can't do this itself (see the cask's own
+          # comment on why).
           #
-          # MACOSX_DEPLOYMENT_TARGET matters here: real bug found live - left
-          # unset, the macos-latest runner's cgo linker embeds whatever its
-          # own SDK defaults to (observed: minos 26.0) into the binary's
-          # LC_BUILD_VERSION load command. `open`/LaunchServices enforces
-          # that against the *running* OS - unlike a direct exec, which
-          # ignores it - so the resulting .app failed to launch via Finder/
-          # Spotlight on any real Mac not yet running that OS version, while
-          # still running fine from a terminal. Pinned to 11.0 to match
-          # Info.plist.template's LSMinimumSystemVersion.
+          # MACOSX_DEPLOYMENT_TARGET matters for bpm-tray specifically: real
+          # bug found live - left unset, the macos-latest runner's cgo
+          # linker embeds whatever its own SDK defaults to (observed: minos
+          # 26.0) into the binary's LC_BUILD_VERSION load command. `open`/
+          # LaunchServices enforces that against the *running* OS - unlike a
+          # direct exec, which ignores it - so the resulting .app failed to
+          # launch via Finder/Spotlight on any real Mac not yet running that
+          # OS version, while still running fine from a terminal. Pinned to
+          # 11.0 to match Info.plist.template's LSMinimumSystemVersion. bpm
+          # itself has no cgo/Cocoa dependency, so it doesn't need the pin,
+          # but setting it for both is simpler and harmless.
           for arch in arm64 amd64; do
             dir="dist-tray/darwin_${arch}"
             mkdir -p "$dir"
             MACOSX_DEPLOYMENT_TARGET=11.0 CGO_ENABLED=1 GOARCH=$arch go build -o "$dir/bpm-tray" ./cmd/bpm-tray
-            tar -C "$dir" -czf "dist-tray/bpm-tray_${{ github.ref_name }}_darwin_${arch}.tar.gz" bpm-tray
+            MACOSX_DEPLOYMENT_TARGET=11.0 CGO_ENABLED=0 GOARCH=$arch go build -o "$dir/bpm" ./cmd/bpm
           done
       - name: Build AppIcon.icns from the embedded logo
         run: |
@@ -85,6 +88,7 @@ jobs:
             mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
             sed "s/VERSION_PLACEHOLDER/${version}/" packaging/macos/Info.plist.template > "$app/Contents/Info.plist"
             cp "dist-tray/darwin_${arch}/bpm-tray" "$app/Contents/MacOS/bpm-tray"
+            cp "dist-tray/darwin_${arch}/bpm" "$app/Contents/MacOS/bpm"
             cp /tmp/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
             plutil -lint "$app/Contents/Info.plist"
             ditto -c -k --sequesterRsrc --keepParent "$app" "dist-tray/BpmTray_${{ github.ref_name }}_darwin_${arch}.zip"
@@ -92,6 +96,4 @@ jobs:
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload ${{ github.ref_name }} dist-tray/*.tar.gz --clobber
-          gh release upload ${{ github.ref_name }} dist-tray/*.zip --clobber
+        run: gh release upload ${{ github.ref_name }} dist-tray/*.zip --clobber
